@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";;
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useServerFn } from "@/lib/react-start-mock";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -16,8 +16,9 @@ const searchSchema = z.object({
 
 
 function InvoicePage() {
-  const { orderId } = Route.useParams();
-  const search = Route.useSearch();
+  const { orderId = "" } = useParams<{ orderId: string }>();
+  const [sp] = useSearchParams();
+  const search = { format: (sp.get("format") as "thermal" | "a4") || "thermal", print: Number(sp.get("print") || 0) };
   const [format, setFormat] = useState<"thermal" | "a4">(search.format ?? "thermal");
   const fn = useServerFn(getInvoicePrintData);
   const q = useQuery({

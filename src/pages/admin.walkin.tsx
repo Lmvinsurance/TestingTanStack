@@ -396,11 +396,7 @@ function WalkinPage() {
           <Button
             disabled={printDisabled}
             onClick={() =>
-              navigate({
-                to: "/admin/invoice/$orderId",
-                params: { orderId: placed!.orderId },
-                search: { format: "thermal" as const, print: 1 as const },
-              })
+              navigate(`/admin/invoice/${placed!.orderId}?format=thermal&print=1`)
             }
             variant={printDisabled ? "outline" : "default"}
             className="w-full"

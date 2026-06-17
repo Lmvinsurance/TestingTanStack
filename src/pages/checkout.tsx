@@ -162,10 +162,9 @@ function CheckoutScreen() {
           return;
         }
       }
-      navigate({
-        to: "/payment-status",
-        search: { orderId: result.orderId, method: checkout.paymentMethod },
-      });
+      navigate(
+        `/payment-status?orderId=${encodeURIComponent(result.orderId)}&method=${encodeURIComponent(checkout.paymentMethod)}`
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to place order");
     } finally {

@@ -12,7 +12,7 @@ import Cart from "./pages/cart";
 // Admin routes
 import AdminLogin from "./pages/admin.login";
 import AdminDashboard from "./pages/admin.dashboard";
-import AdminBrands from "./pages/admin.addons"; // legacy, kept
+import AdminBrands from "./pages/admin.addons";
 import AdminCategories from "./pages/admin.categories";
 import AdminItems from "./pages/admin.items";
 import AdminOrders from "./pages/admin.orders";
@@ -36,11 +36,14 @@ import AdminBulkUpload from "./pages/admin.bulk-upload";
 // Customer routes
 import CustomerSignin from "./pages/customer.signin";
 import CustomerSignup from "./pages/customer.signup";
-import CustomerMenu from "./pages/customer.menu";
-import CustomerCheckout from "./pages/checkout"; // named checkout.tsx
+// Import the new CustomerMenuPage
+import { CustomerMenuPage } from "./components/CustomerMenuPage";
+import CustomerCheckout from "./pages/checkout";
 import CustomerOrders from "./pages/customer.my-orders";
-import CustomerProfile from "./pages/customer.my-orders"; // mapping just as a placeholder
+import CustomerOrderDetail from "./pages/customer.order-detail.$orderId";
 import CustomerOutlets from "./pages/customer.outlets";
+import PaymentStatus from "./pages/payment-status";
+import AdminInvoice from "./pages/admin.invoice.$orderId";
 
 // Sub-routes for items
 import CustomerItemDetails from "./pages/customer.item-detail.$itemId";
@@ -99,17 +102,24 @@ export default function App() {
             <Route path="/admin/bulk-upload" element={<AdminBulkUpload />} />
           </Route>
           
+          {/* Customer routes with layout */}
           <Route element={<CustomerLayoutWrapper />}>
             <Route path="/cart" element={<Cart />} />
             <Route path="/customer/signin" element={<CustomerSignin />} />
             <Route path="/customer/signup" element={<CustomerSignup />} />
-            <Route path="/customer/menu" element={<CustomerMenu />} />
             <Route path="/customer/checkout" element={<CustomerCheckout />} />
             <Route path="/customer/orders" element={<CustomerOrders />} />
-            <Route path="/customer/profile" element={<CustomerProfile />} />
+            <Route path="/customer/profile" element={<CustomerOrders />} />
             <Route path="/customer/outlets" element={<CustomerOutlets />} />
             <Route path="/customer/item/:id" element={<CustomerItemDetails />} />
+            <Route path="/customer/order/:orderId" element={<CustomerOrderDetail />} />
+            <Route path="/payment-status" element={<PaymentStatus />} />
           </Route>
+          
+          {/* Menu page - WITHOUT the customer layout wrapper to avoid duplicate header */}
+          <Route path="/customer/menu" element={<CustomerMenuPage />} />
+          
+          <Route path="/admin/invoice/:orderId" element={<AdminInvoice />} />
         </Route>
       </Routes>
     </Suspense>

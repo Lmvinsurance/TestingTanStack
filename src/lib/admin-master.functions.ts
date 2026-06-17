@@ -68,6 +68,7 @@ export const listOutlets = createServerFn({ method: "GET" })
     };
   });
 
+// Update the OutletInput type to include image_url
 type OutletInput = {
   id?: string | null;
   outlet_name: string;
@@ -83,8 +84,10 @@ type OutletInput = {
   opening_time?: string | null;
   closing_time?: string | null;
   is_active: boolean;
+  image_url?: string | null; // ADD THIS
 };
 
+// Update the upsertOutlet function
 export const upsertOutlet = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: OutletInput) => {
@@ -110,6 +113,7 @@ export const upsertOutlet = createServerFn({ method: "POST" })
       opening_time: data.opening_time || null,
       closing_time: data.closing_time || null,
       is_active: data.is_active,
+      image_url: data.image_url || null, // ADD THIS - CRITICAL FIX
       updated_by: admin.id,
     };
     if (data.id) {

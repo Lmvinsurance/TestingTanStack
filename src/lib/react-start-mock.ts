@@ -6,39 +6,38 @@ type ServerFnContext = {
   userId: string;
 };
 
-export function createServerFn<TInput, TOutput>(options: any) {
-  let middlewareFns: any[] = [];
-  let validatorFn: any = (data: any) => data;
-  let handlerFn: any = async () => {};
+type HandlerArg = { data: any; context: any };
+type HandlerFn = (arg: HandlerArg) => any;
+type MiddlewareArg = { next: any; data?: any; context?: any };
+type MiddlewareFn = (arg: MiddlewareArg) => any;
 
-  const builder = {
-    middleware(fns: any[]) {
-      middlewareFns = fns;
+interface ServerFnBuilder {
+  middleware(fns: any[]): ServerFnBuilder;
+  inputValidator(fn: (data: any) => any): ServerFnBuilder;
+  handler(fn: HandlerFn): (args?: { data?: any }) => Promise<any>;
+}
+
+export function createServerFn<TInput = any, TOutput = any>(_options?: any): ServerFnBuilder {
+  let validatorFn: (data: any) => any = (data: any) => data;
+  let handlerFn: HandlerFn = async () => {};
+
+  const builder: ServerFnBuilder = {
+    middleware(_fns: any[]) {
       return builder;
     },
-    inputValidator(fn: any) {
+    inputValidator(fn: (data: any) => any) {
       validatorFn = fn;
       return builder;
     },
-    handler(fn: any) {
+    handler(fn: HandlerFn) {
       handlerFn = fn;
       return async function execute(args?: { data?: any }) {
-        try {
-          const validatedData = validatorFn(args?.data);
-          
-          const { data: { session } } = await supabase.auth.getSession();
-          let context: ServerFnContext = { userId: session?.user?.id || "unauthenticated" };
-          
-          // Run middlewares if we needed to (mocked)
-          // For now, we simulate success
-          
-          // Execute handler
-          return await handlerFn({ data: validatedData, context });
-        } catch (err) {
-          throw err;
-        }
+        const validatedData = validatorFn(args?.data);
+        const { data: { session } } = await supabase.auth.getSession();
+        const context: ServerFnContext = { userId: session?.user?.id || "unauthenticated" };
+        return await handlerFn({ data: validatedData, context });
       };
-    }
+    },
   };
 
   return builder;
@@ -48,9 +47,10 @@ export function useServerFn(fn: any) {
   return fn;
 }
 
-export function createMiddleware(options?: any) {
+export function createMiddleware(_options?: any) {
   return {
-    server: (fn: any) => fn
+    server: (fn: MiddlewareFn) => fn,
+    client: (fn: MiddlewareFn) => fn,
   };
 }
 

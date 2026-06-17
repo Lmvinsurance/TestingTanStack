@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronLeft,
   Clock,
@@ -19,11 +19,11 @@ import {
   Tag,
   Heart,
   Share2,
-  ChefHat,
 } from "lucide-react";
 import { menuService, MenuItemWithDetails } from "@/lib/supabase-menu.service";
-import { useCart, addToCart, useOutlet } from "@/lib/cart-store";
+import { useCartStore } from "@/stores/cartStore";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
 
 /* ─────────────────────────  Variant Selector  ───────────────────────── */
 
@@ -124,27 +124,24 @@ function VariantSelector({ variants, selectedVariantId, onVariantSelect }: Varia
 
 interface AddToCartSectionProps {
   itemId: string;
-  itemName: string;
   selectedVariantId: string | null;
   variant: MenuItemWithDetails['variants'][0] | null;
   isAvailable: boolean;
   stockStatus: string;
-  outletId: string;
-  imageUrl: string | null;
+  onAddToCart: (quantity: number, instructions?: string) => void;
 }
 
 function AddToCartSection({ 
-  itemId,
-  itemName,
+  itemId, 
   selectedVariantId, 
   variant, 
   isAvailable, 
   stockStatus,
-  outletId,
-  imageUrl
+  onAddToCart 
 }: AddToCartSectionProps) {
   const [quantity, setQuantity] = useState(1);
-  const navigate = useNavigate();
+  const [instructions, setInstructions] = useState("");
+  const [showInstructions, setShowInstructions] = useState(false);
 
   const handleQuantityChange = (delta: number) => {
     const newQuantity = Math.max(1, Math.min(10, quantity + delta));
@@ -153,32 +150,9 @@ function AddToCartSection({
 
   const isDisabled = !selectedVariantId || !variant || !isAvailable || stockStatus === 'sold_out';
 
-  const handleAddToCart = () => {
-    if (!selectedVariantId || !variant || !variant.outlet_price) return;
-
-    // Add to cart - NO LOGIN REQUIRED
-    addToCart({
-      id: `${itemId}-${selectedVariantId}-${Date.now()}`,
-      outletId: outletId,
-      itemId: itemId,
-      variantId: selectedVariantId,
-      name: itemName,
-      variant: variant.variant_name,
-      price: variant.outlet_price.selling_price,
-      qty: quantity,
-      image: imageUrl || undefined,
-    });
-
-    toast.success(`Added ${quantity} × ${itemName} to cart!`, {
-      action: {
-        label: 'View Cart',
-        onClick: () => navigate('/cart'),
-      },
-    });
-  };
-
   return (
     <div className="space-y-4">
+      {/* Main Add to Cart */}
       <div className="bg-white rounded-xl border border-gold/20 p-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
           {/* Quantity Selector */}
@@ -221,7 +195,7 @@ function AddToCartSection({
 
           {/* Add to Cart Button */}
           <button
-            onClick={handleAddToCart}
+            onClick={() => onAddToCart(quantity, instructions)}
             disabled={isDisabled}
             className={`
               ml-auto flex items-center gap-2 rounded-full px-6 py-3 font-semibold transition-all
@@ -235,6 +209,31 @@ function AddToCartSection({
             Add to Cart
           </button>
         </div>
+
+        {/* Special Instructions Toggle */}
+        <button
+          onClick={() => setShowInstructions(!showInstructions)}
+          className="mt-3 text-xs text-maroon-deep/60 hover:text-maroon transition-colors"
+        >
+          {showInstructions ? 'Hide' : 'Add'} special instructions
+        </button>
+
+        {showInstructions && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="mt-3"
+          >
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="E.g., No onions, extra spicy, etc."
+              className="w-full rounded-lg border border-gold/30 bg-cream p-3 text-sm text-maroon-deep placeholder-maroon-deep/40 focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/20"
+              rows={2}
+            />
+          </motion.div>
+        )}
 
         {/* Availability Status */}
         {!isAvailable && (
@@ -264,26 +263,37 @@ function AddToCartSection({
 
 /* ─────────────────────────  Main Component  ───────────────────────── */
 
-export default function CustomerItemDetails() {
-  const { id } = useParams<{ id: string }>();
+export function CustomerMenuItemDetail() {
+  const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
-  const outlet = useOutlet();
-  const cart = useCart();
+  const { user } = useAuth();
+  const { addItem, getItemCount } = useCartStore();
   
   const [item, setItem] = useState<MenuItemWithDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
+  const [outletId, setOutletId] = useState<string | null>(null);
   const [isWishlisted, setIsWishlisted] = useState(false);
 
-  // Load item details
+  // Load outlet and item details
   useEffect(() => {
     const loadData = async () => {
-      if (!id || !outlet) return;
+      if (!slug) return;
       
       try {
         setLoading(true);
         
-        const itemData = await menuService.getMenuItemWithDetailsById(id, outlet.id);
+        // Get current outlet
+        const currentOutletId = await menuService.getCurrentOutletId();
+        setOutletId(currentOutletId);
+
+        if (!currentOutletId) {
+          toast.error('No outlet available');
+          return;
+        }
+
+        // Get item details
+        const itemData = await menuService.getMenuItemWithDetails(slug, currentOutletId);
         if (itemData) {
           setItem(itemData);
           
@@ -309,7 +319,7 @@ export default function CustomerItemDetails() {
     };
 
     loadData();
-  }, [id, navigate, outlet]);
+  }, [slug, navigate]);
 
   const getPrimaryImage = (item: MenuItemWithDetails): string | null => {
     if (item.images && item.images.length > 0) {
@@ -319,23 +329,50 @@ export default function CustomerItemDetails() {
     return null;
   };
 
-  // Check if item is already in cart
-  const isInCart = cart.some(c => c.itemId === id);
-  const cartItem = cart.find(c => c.itemId === id);
+  const handleAddToCart = (quantity: number, instructions?: string) => {
+    if (!user) {
+      toast.error('Please login to add items to cart', {
+        action: {
+          label: 'Login',
+          onClick: () => navigate('/auth/login'),
+        },
+      });
+      return;
+    }
 
-  if (!outlet) {
-    return (
-      <div className="min-h-screen bg-cream flex items-center justify-center">
-        <div className="text-center">
-          <AlertCircle className="mx-auto h-16 w-16 text-maroon-deep/30" />
-          <p className="mt-4 text-maroon-deep">Please select an outlet first</p>
-          <Link to="/customer/outlets" className="mt-4 inline-block text-saffron-deep hover:underline">
-            Select Outlet
-          </Link>
-        </div>
-      </div>
-    );
-  }
+    if (!selectedVariantId) {
+      toast.error('Please select a variant');
+      return;
+    }
+
+    if (!item) return;
+
+    const selectedVariant = item.variants.find(v => v.id === selectedVariantId);
+    if (!selectedVariant || !selectedVariant.outlet_price) {
+      toast.error('Variant not available');
+      return;
+    }
+
+    // Add to cart
+    addItem({
+      itemId: item.id,
+      variantId: selectedVariantId,
+      outletId: outletId!,
+      quantity: quantity,
+      name: item.item_name,
+      variantName: selectedVariant.variant_name,
+      price: selectedVariant.outlet_price.selling_price,
+      imageUrl: getPrimaryImage(item) || undefined,
+      specialInstructions: instructions,
+    }, user.id);
+
+    toast.success(`Added ${quantity} × ${item.item_name} to cart!`, {
+      action: {
+        label: 'View Cart',
+        onClick: () => navigate('/customer/cart'),
+      },
+    });
+  };
 
   if (loading) {
     return (
@@ -367,6 +404,7 @@ export default function CustomerItemDetails() {
   const availability = item.outlet_availability;
   const isAvailable = availability?.is_available ?? false;
   const stockStatus = availability?.stock_status ?? 'available';
+  const itemInCart = getItemCount(item.id, selectedVariantId || '');
 
   return (
     <div className="min-h-screen bg-cream pb-12">
@@ -392,7 +430,7 @@ export default function CustomerItemDetails() {
               />
             ) : (
               <div className="flex h-full items-center justify-center">
-                <ChefHat className="h-20 w-20 text-gold/30" />
+                <UtensilsCrossed className="h-20 w-20 text-gold/30" />
               </div>
             )}
             
@@ -433,13 +471,11 @@ export default function CustomerItemDetails() {
               </button>
               <button
                 onClick={() => {
-                  if (navigator.share) {
-                    navigator.share({
-                      title: item.item_name,
-                      text: item.short_description || '',
-                      url: window.location.href,
-                    });
-                  }
+                  navigator.share?.({
+                    title: item.item_name,
+                    text: item.short_description || '',
+                    url: window.location.href,
+                  });
                 }}
                 className="rounded-full bg-white/90 p-2 shadow-md hover:bg-white transition-colors backdrop-blur-sm"
               >
@@ -512,16 +548,10 @@ export default function CustomerItemDetails() {
             </div>
 
             {/* In Cart Indicator */}
-            {isInCart && (
+            {itemInCart > 0 && (
               <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-green-50 px-3 py-1 text-sm text-green-700">
                 <CheckCircle className="h-4 w-4" />
-                {cartItem?.qty || 1} in cart
-                <button 
-                  onClick={() => navigate('/cart')}
-                  className="ml-2 text-xs text-saffron-deep hover:underline"
-                >
-                  View Cart
-                </button>
+                {itemInCart} in cart
               </div>
             )}
           </div>
@@ -546,13 +576,11 @@ export default function CustomerItemDetails() {
         {/* Add to Cart Section */}
         <AddToCartSection
           itemId={item.id}
-          itemName={item.item_name}
           selectedVariantId={selectedVariantId}
           variant={selectedVariant}
           isAvailable={isAvailable}
           stockStatus={stockStatus}
-          outletId={outlet.id}
-          imageUrl={imageUrl}
+          onAddToCart={handleAddToCart}
         />
 
         {/* Nutritional Info */}

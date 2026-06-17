@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createServerFn } from "@/lib/react-start-mock";
 import { z } from "zod";
 

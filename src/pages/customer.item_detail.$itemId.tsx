@@ -22,8 +22,10 @@ import {
   ChefHat,
 } from "lucide-react";
 import { menuService, MenuItemWithDetails } from "@/lib/supabase-menu.service";
-import { useCart, addToCart, useOutlet } from "@/lib/cart-store";
+import { useCart, addToCart } from "@/lib/cart-store";
+import { useOutlet } from "@/lib/cart-store";
 import { toast } from "sonner";
+import { useRequireCustomer } from "@/lib/use-require-customer";
 
 /* ─────────────────────────  Variant Selector  ───────────────────────── */
 
@@ -144,7 +146,6 @@ function AddToCartSection({
   imageUrl
 }: AddToCartSectionProps) {
   const [quantity, setQuantity] = useState(1);
-  const navigate = useNavigate();
 
   const handleQuantityChange = (delta: number) => {
     const newQuantity = Math.max(1, Math.min(10, quantity + delta));
@@ -156,7 +157,6 @@ function AddToCartSection({
   const handleAddToCart = () => {
     if (!selectedVariantId || !variant || !variant.outlet_price) return;
 
-    // Add to cart - NO LOGIN REQUIRED
     addToCart({
       id: `${itemId}-${selectedVariantId}-${Date.now()}`,
       outletId: outletId,
@@ -167,18 +167,15 @@ function AddToCartSection({
       price: variant.outlet_price.selling_price,
       qty: quantity,
       image: imageUrl || undefined,
+      dietary: variant.outlet_price.is_available ? undefined : undefined,
     });
 
-    toast.success(`Added ${quantity} × ${itemName} to cart!`, {
-      action: {
-        label: 'View Cart',
-        onClick: () => navigate('/cart'),
-      },
-    });
+    toast.success(`Added ${quantity} × ${itemName} to cart!`);
   };
 
   return (
     <div className="space-y-4">
+      {/* Main Add to Cart */}
       <div className="bg-white rounded-xl border border-gold/20 p-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
           {/* Quantity Selector */}
@@ -267,6 +264,7 @@ function AddToCartSection({
 export default function CustomerItemDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const ready = useRequireCustomer();
   const outlet = useOutlet();
   const cart = useCart();
   
@@ -278,11 +276,12 @@ export default function CustomerItemDetails() {
   // Load item details
   useEffect(() => {
     const loadData = async () => {
-      if (!id || !outlet) return;
+      if (!id || !ready || !outlet) return;
       
       try {
         setLoading(true);
         
+        // Get item details by ID
         const itemData = await menuService.getMenuItemWithDetailsById(id, outlet.id);
         if (itemData) {
           setItem(itemData);
@@ -309,7 +308,7 @@ export default function CustomerItemDetails() {
     };
 
     loadData();
-  }, [id, navigate, outlet]);
+  }, [id, navigate, ready, outlet]);
 
   const getPrimaryImage = (item: MenuItemWithDetails): string | null => {
     if (item.images && item.images.length > 0) {
@@ -323,19 +322,7 @@ export default function CustomerItemDetails() {
   const isInCart = cart.some(c => c.itemId === id);
   const cartItem = cart.find(c => c.itemId === id);
 
-  if (!outlet) {
-    return (
-      <div className="min-h-screen bg-cream flex items-center justify-center">
-        <div className="text-center">
-          <AlertCircle className="mx-auto h-16 w-16 text-maroon-deep/30" />
-          <p className="mt-4 text-maroon-deep">Please select an outlet first</p>
-          <Link to="/customer/outlets" className="mt-4 inline-block text-saffron-deep hover:underline">
-            Select Outlet
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  if (!ready || !outlet) return null;
 
   if (loading) {
     return (

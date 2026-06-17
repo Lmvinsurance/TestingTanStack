@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";;
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useRequireCustomer } from "@/lib/use-require-customer";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@/lib/react-start-mock";
@@ -21,7 +21,9 @@ type Search = { orderId?: string; method?: "phonepe" | "upi" | "cod" };
 
 function PaymentStatusScreen() {
   const ready = useRequireCustomer();
-  const { orderId, method } = Route.useSearch();
+  const [sp] = useSearchParams();
+  const orderId = sp.get("orderId") || undefined;
+  const method = (sp.get("method") as "phonepe" | "upi" | "cod" | null) || undefined;
   const navigate = useNavigate();
   const fetchDetail = useServerFn(getMyOrderDetail);
   const verifyPhonePe = useServerFn(verifyPhonePePayment);

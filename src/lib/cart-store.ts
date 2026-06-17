@@ -26,7 +26,14 @@ const CART_KEY = "krr_cart_v1";
 const OUTLET_KEY = "krr_outlet_v1";
 
 const listeners = new Set<() => void>();
-function emit() { listeners.forEach((l) => l()); }
+function emit() {
+  cachedCart = null;
+  cachedOutlet = null;
+  listeners.forEach((l) => l());
+}
+
+let cachedCart: CartItem[] | null = null;
+let cachedOutlet: Outlet | null | undefined = undefined;
 
 function read<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -39,11 +46,13 @@ function write<T>(key: string, v: T) {
   emit();
 }
 
-export function getCart(): CartItem[] { return read(CART_KEY, []); }
+export function getCart(): CartItem[] {
+  if (cachedCart === null) cachedCart = read<CartItem[]>(CART_KEY, []);
+  return cachedCart;
+}
 export function setCart(items: CartItem[]) { write(CART_KEY, items); }
 export function addToCart(item: CartItem) {
-  const cart = getCart();
-  cart.push({ ...item, id: item.id || crypto.randomUUID() });
+  const cart = [...getCart(), { ...item, id: item.id || crypto.randomUUID() }];
   setCart(cart);
 }
 
@@ -59,13 +68,17 @@ export function updateQty(id: string, qty: number) {
 export function removeItem(id: string) { setCart(getCart().filter((c) => c.id !== id)); }
 export function clearCart() { setCart([]); }
 
-export function getOutlet(): Outlet | null { return read<Outlet | null>(OUTLET_KEY, null); }
+export function getOutlet(): Outlet | null {
+  if (cachedOutlet === undefined) cachedOutlet = read<Outlet | null>(OUTLET_KEY, null);
+  return cachedOutlet;
+}
 export function setOutlet(o: Outlet) { write(OUTLET_KEY, o); }
 
+const EMPTY_CART: CartItem[] = [];
+const subscribeCart = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
+const getServerCart = () => EMPTY_CART;
 export function useCart() {
-  const subscribe = (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); };
-  const items = useSyncExternalStore(subscribe, getCart, () => [] as CartItem[]);
-  return items;
+  return useSyncExternalStore(subscribeCart, getCart, getServerCart);
 }
 export function useOutlet() {
   const [o, setO] = useState<Outlet | null>(null);

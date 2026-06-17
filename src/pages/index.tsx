@@ -1,6 +1,7 @@
-import { Link } from "react-router-dom";;
+import { Link } from "react-router-dom";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { outletService, Outlet } from "@/lib/supabase-outlets.service";
+import { useState, useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -17,20 +18,19 @@ import {
   User,
   UtensilsCrossed,
   X,
+  Award,
 } from "lucide-react";
-import kostaLogo from "@/assets/kosta-logo.asset.json";
-import theeyagaLogo from "@/assets/theeyaga-logo.asset.json";
+// Import your actual logo images
+import headerLogo from "@/assets/Logotfc1-DFU8N0iG (1).png";
+import kostaLogo from "@/assets/Logotfc1-DFU8N0iG (1).png";
+import theeyagaLogo from "@/assets/THEEYAGA-KAARAMGA-PHOTOROOM.png";
 import heroThali from "@/assets/hero-thali.jpg";
-import catBiryani from "@/assets/cat-biryani.jpg";
-import catPickles from "@/assets/cat-pickles.jpg";
-import catSweets from "@/assets/cat-sweets.jpg";
-import catTiffins from "@/assets/cat-tiffins.jpg";
-import catSnacks from "@/assets/cat-snacks.jpg";
 import outlet1 from "@/assets/outlet-1.jpg";
 import outlet2 from "@/assets/outlet-2.jpg";
 import { OrnamentalBorder } from "@/components/SplashDecorations";
-
-
+// Import Supabase menu components
+import { menuService, MenuCategory } from "@/lib/supabase-menu.service";
+import { toast } from "sonner";
 
 /* ─────────────────────────  Shared Decorative bits  ───────────────────────── */
 
@@ -87,15 +87,11 @@ function Navbar() {
     <header className="sticky top-0 z-40 border-b border-gold/30 bg-cream/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
         <Link to="/" className="flex items-center gap-2">
-          <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-saffron to-saffron-deep text-cream shadow-sm">
-            <UtensilsCrossed className="h-5 w-5" />
-          </div>
-          <div className="leading-tight">
-            <p className="text-display text-base text-maroon">Telugu Food</p>
-            <p className="text-[10px] uppercase tracking-[0.3em] text-saffron-deep">
-              Club
-            </p>
-          </div>
+          <img
+            src={headerLogo}
+            alt="Telugu Food Club"
+            className="h-12 w-auto object-contain"
+          />
         </Link>
         <nav className="hidden items-center gap-8 md:flex">
           {links.map((l) => (
@@ -199,7 +195,7 @@ function Hero() {
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-cream/40 via-cream/10 to-cream" />
 
       <div className="mx-auto flex max-w-6xl flex-col items-center px-5 pb-24 pt-12 text-center md:pb-32 md:pt-20">
-        {/* Logo plaque */}
+        {/* Logo plaque - Kosta Rajula Ruchulu Logo */}
         <motion.div
           initial={{ opacity: 0, scale: 0.85 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -209,7 +205,7 @@ function Hero() {
           <div className="absolute inset-0 -z-10 rounded-full bg-[radial-gradient(circle,oklch(0.92_0.12_82/0.65)_0%,transparent_70%)] blur-2xl" />
           <div className="rounded-full bg-cream/40 p-2 ring-1 ring-gold/40 backdrop-blur-sm">
             <img
-              src={kostaLogo.url}
+              src={kostaLogo}
               alt="Kosta Rajula Ruchulu"
               className="h-32 w-32 rounded-full object-contain sm:h-40 sm:w-40"
             />
@@ -242,7 +238,7 @@ function Hero() {
           className="mt-8 flex w-full max-w-md flex-col items-center gap-3 sm:flex-row sm:justify-center"
         >
           <Link
-            to="/brands"
+            to="/customer/menu"
             className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-maroon px-7 py-3.5 text-sm font-medium text-cream shadow-lg shadow-maroon/20 transition hover:bg-maroon-deep sm:w-auto"
           >
             <UtensilsCrossed className="h-4 w-4" /> Order Food
@@ -313,7 +309,6 @@ function BrandCard({
       transition={{ duration: 0.7 }}
       className={`relative overflow-hidden rounded-3xl border border-gold/30 bg-gradient-to-br ${accentBg} p-6 shadow-xl shadow-maroon/5 backdrop-blur-sm sm:p-8`}
     >
-      {/* corner ornaments */}
       <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-saffron/10 blur-2xl" />
       <div className="flex flex-col items-center text-center">
         <div className="rounded-full bg-cream p-2 ring-1 ring-gold/40 shadow-md">
@@ -378,7 +373,7 @@ function Brands() {
         />
         <div className="mt-12 grid gap-6 md:grid-cols-2">
           <BrandCard
-            logo={kostaLogo.url}
+            logo={kostaLogo}
             title="Kosta Rajula Ruchulu"
             tagline="Traditional Telugu Restaurant"
             description="Freshly prepared Telugu meals, biryanis, curries, tiffins and family favourites."
@@ -394,7 +389,7 @@ function Brands() {
             accent="maroon"
           />
           <BrandCard
-            logo={theeyagaLogo.url}
+            logo={theeyagaLogo}
             title="Theeyaga-Kaaranga"
             tagline="Snacks · Sweets · Pickles"
             description="Traditional Andhra pickles, homemade sweets, spicy snacks and regional delicacies."
@@ -472,126 +467,136 @@ function Why() {
   );
 }
 
-/* ─────────────────────────  Section 4: Categories  ───────────────────────── */
+/* ─────────────────────────  Section 4: Categories (Supabase Powered - Only Categories)  ───────────────────────── */
 
-function CategoryTile({
-  img,
-  label,
-  small,
-}: {
-  img: string;
-  label: string;
-  small?: boolean;
-}) {
-  return (
-    <Link
-      to="/customer/menu"
-      className="group relative block overflow-hidden rounded-2xl border border-gold/30 bg-maroon-deep shadow-md transition hover:-translate-y-1 hover:shadow-xl"
-    >
-      <div className={small ? "aspect-square" : "aspect-[4/5]"}>
-        <img
-          src={img}
-          alt={label}
-          loading="lazy"
-          className="h-full w-full object-cover opacity-90 transition duration-700 group-hover:scale-110 group-hover:opacity-100"
-        />
-      </div>
-      <div className="absolute inset-0 bg-gradient-to-t from-maroon-deep via-maroon-deep/30 to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 p-4">
-        <p className="text-display text-lg text-cream sm:text-xl">{label}</p>
-        <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.2em] text-gold">
-          Explore <ChevronRight className="h-3 w-3" />
-        </p>
-      </div>
-    </Link>
-  );
-}
-
+// Categories Component - Only shows categories as cards
 function Categories() {
-  const kosta = [
-    { label: "Tiffins", img: catTiffins },
-    { label: "Biryani", img: catBiryani },
-    { label: "Meals", img: heroThali },
-    { label: "Curries", img: catBiryani },
-    { label: "Desserts", img: catSweets },
-  ];
-  const theeyaga = [
-    { label: "Pickles", img: catPickles },
-    { label: "Sweets", img: catSweets },
-    { label: "Snacks", img: catSnacks },
-    { label: "Festival Specials", img: catSweets },
-    { label: "Combo Packs", img: catSnacks },
-  ];
+  const [categories, setCategories] = useState<MenuCategory[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadCategories();
+  }, []);
+
+  const loadCategories = async () => {
+    try {
+      setLoading(true);
+      const data = await menuService.getCategories();
+      setCategories(data);
+    } catch (error) {
+      console.error("Error loading categories:", error);
+      toast.error("Failed to load menu categories");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <section
+        id="categories"
+        className="bg-gradient-to-b from-cream to-cream-warm/50 px-4 py-16 sm:py-20"
+      >
+        <div className="mx-auto max-w-6xl">
+          <SectionHeading
+            label="Categories"
+            title="Explore Our Menu"
+            subtitle="Discover authentic Telugu flavors from our curated menu"
+          />
+          <div className="mt-10 flex items-center justify-center py-12">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-saffron-deep border-t-transparent" />
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (categories.length === 0) {
+    return (
+      <section
+        id="categories"
+        className="bg-gradient-to-b from-cream to-cream-warm/50 px-4 py-16 sm:py-20"
+      >
+        <div className="mx-auto max-w-6xl">
+          <SectionHeading
+            label="Categories"
+            title="Explore Our Menu"
+            subtitle="Discover authentic Telugu flavors from our curated menu"
+          />
+          <div className="mt-10 text-center text-maroon-deep/70">
+            <UtensilsCrossed className="mx-auto h-16 w-16 text-saffron-deep/40" />
+            <p className="mt-4 text-lg">No categories available</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section
       id="categories"
-      className="bg-gradient-to-b from-cream to-cream-warm/50 px-5 py-20 sm:py-24"
+      className="bg-gradient-to-b from-cream to-cream-warm/50 px-4 py-16 sm:py-20"
     >
       <div className="mx-auto max-w-6xl">
         <SectionHeading
-          label="Featured Categories"
-          title="Crafted For Every Craving"
-          subtitle="From hand-pounded pickles to slow-cooked biryanis."
+          label="Categories"
+          title="Explore Our Menu"
+          subtitle="Discover authentic Telugu flavors from our curated menu"
         />
 
-        {/* Kosta */}
-        <div className="mt-12">
-          <div className="flex items-end justify-between">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-saffron-deep">
-                Kosta Rajula Ruchulu
-              </p>
-              <h3 className="text-display mt-1 text-2xl text-maroon sm:text-3xl">
-                The Restaurant Menu
-              </h3>
-            </div>
-            <Link
-              to="/customer/menu"
-              className="hidden text-sm font-medium text-maroon underline-offset-4 hover:underline sm:inline"
+        {/* Category Cards Grid */}
+        <div className="mt-10 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+          {categories.map((category, index) => (
+            <motion.div
+              key={category.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: index * 0.05 }}
+              className="group"
             >
-              View all →
-            </Link>
-          </div>
-          <div className="mt-5 flex snap-x snap-mandatory gap-4 overflow-x-auto pb-4 sm:grid sm:grid-cols-3 sm:overflow-visible lg:grid-cols-5">
-            {kosta.map((c) => (
-              <div
-                key={c.label}
-                className="w-[68%] flex-shrink-0 snap-start sm:w-auto"
+              <Link
+                to={`/customer/menu`}
+                className="block relative overflow-hidden rounded-xl border border-gold/30 bg-cream shadow-sm hover:shadow-md transition-all hover:-translate-y-1"
               >
-                <CategoryTile img={c.img} label={c.label} />
-              </div>
-            ))}
-          </div>
+                {/* Category Image */}
+                <div className="aspect-square overflow-hidden bg-cream">
+                  {category.image_url ? (
+                    <img
+                      src={category.image_url}
+                      alt={category.category_name}
+                      className="h-full w-full object-cover transition duration-500 group-hover:scale-110"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center bg-gradient-to-br from-gold/10 to-saffron/10">
+                      <UtensilsCrossed className="h-12 w-12 text-gold/30" />
+                    </div>
+                  )}
+                </div>
+                
+                {/* Category Name Overlay */}
+                <div className="absolute bottom-0 left-0 right-0 p-3 text-center bg-gradient-to-t from-black/70 via-black/40 to-transparent">
+                  <p className="text-sm font-semibold text-cream">
+                    {category.category_name}
+                  </p>
+                  <p className="text-[10px] text-cream/70 mt-0.5">
+                    View Menu →
+                  </p>
+                </div>
+              </Link>
+            </motion.div>
+          ))}
         </div>
 
-        {/* Theeyaga */}
-        <div className="mt-14">
-          <div className="flex items-end justify-between">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-saffron-deep">
-                Theeyaga-Kaaranga
-              </p>
-              <h3 className="text-display mt-1 text-2xl text-maroon sm:text-3xl">
-                Heritage Pantry
-              </h3>
-            </div>
-            <Link
-              to="/customer/menu"
-              className="hidden text-sm font-medium text-maroon underline-offset-4 hover:underline sm:inline"
-            >
-              View all →
-            </Link>
-          </div>
-          <div className="mt-5 flex snap-x snap-mandatory gap-4 overflow-x-auto pb-4 sm:grid sm:grid-cols-3 sm:overflow-visible lg:grid-cols-5">
-            {theeyaga.map((c) => (
-              <div
-                key={c.label}
-                className="w-[68%] flex-shrink-0 snap-start sm:w-auto"
-              >
-                <CategoryTile img={c.img} label={c.label} />
-              </div>
-            ))}
-          </div>
+        {/* View Full Menu Button */}
+        <div className="mt-12 text-center">
+          <Link
+            to="/customer/menu"
+            className="inline-flex items-center gap-2 rounded-full bg-maroon px-8 py-3.5 text-sm font-medium text-cream transition hover:bg-maroon-deep shadow-lg shadow-maroon/20"
+          >
+            View Full Menu
+            <ChevronRight className="h-4 w-4" />
+          </Link>
         </div>
       </div>
     </section>
@@ -600,27 +605,69 @@ function Categories() {
 
 /* ─────────────────────────  Section 5: Outlets  ───────────────────────── */
 
+/* ─────────────────────────  Section 5: Outlets (Supabase Powered)  ───────────────────────── */
+
 function Outlets() {
-  const outlets = [
-    {
-      img: outlet1,
-      name: "Kosta Rajula Ruchulu — Banjara Hills",
-      address: "Road No. 12, Banjara Hills, Hyderabad 500034",
-      timings: "11:00 AM – 11:00 PM",
-    },
-    {
-      img: outlet1,
-      name: "Kosta Rajula Ruchulu — Vijayawada",
-      address: "MG Road, Governorpet, Vijayawada 520002",
-      timings: "11:30 AM – 10:30 PM",
-    },
-    {
-      img: outlet2,
-      name: "Theeyaga-Kaaranga Flagship — Gachibowli",
-      address: "Lumbini Avenue, Gachibowli, Hyderabad 500032",
-      timings: "10:00 AM – 9:00 PM",
-    },
-  ];
+  const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadOutlets();
+  }, []);
+
+  const loadOutlets = async () => {
+    try {
+      setLoading(true);
+      const data = await outletService.getOutlets();
+      setOutlets(data);
+    } catch (error) {
+      console.error("Error loading outlets:", error);
+      toast.error("Failed to load outlets");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getDefaultImage = (index: number) => {
+    // Use different default images based on index
+    const images = [outlet1, outlet2, outlet1];
+    return images[index % images.length];
+  };
+
+  if (loading) {
+    return (
+      <section id="outlets" className="px-5 py-20 sm:py-24">
+        <div className="mx-auto max-w-6xl">
+          <SectionHeading
+            label="Outlet Locations"
+            title="Find Us Across The Telugu States"
+          />
+          <div className="mt-12 flex items-center justify-center py-12">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-saffron-deep border-t-transparent" />
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (outlets.length === 0) {
+    return (
+      <section id="outlets" className="px-5 py-20 sm:py-24">
+        <div className="mx-auto max-w-6xl">
+          <SectionHeading
+            label="Outlet Locations"
+            title="Find Us Across The Telugu States"
+          />
+          <div className="mt-12 text-center text-maroon-deep/70">
+            <MapPin className="mx-auto h-16 w-16 text-saffron-deep/40" />
+            <p className="mt-4 text-lg">No outlets available</p>
+            <p className="text-sm">Please check back later</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section id="outlets" className="px-5 py-20 sm:py-24">
       <div className="mx-auto max-w-6xl">
@@ -629,46 +676,78 @@ function Outlets() {
           title="Find Us Across The Telugu States"
         />
         <div className="mt-12 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {outlets.map((o, i) => (
-            <motion.div
-              key={o.name}
-              initial={{ opacity: 0, y: 20 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: i * 0.1 }}
-              className="overflow-hidden rounded-3xl border border-gold/30 bg-cream shadow-md"
-            >
-              <div className="relative aspect-[4/3] overflow-hidden">
-                <img
-                  src={o.img}
-                  alt={o.name}
-                  loading="lazy"
-                  className="h-full w-full object-cover"
-                />
-                <div className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-full bg-cream/90 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-maroon">
-                  <span className="h-1.5 w-1.5 rounded-full bg-green-600" />
-                  Open Now
+          {outlets.map((outlet, index) => {
+            const isOpen = outletService.isOutletOpen(outlet);
+            const timeRange = outletService.formatTimeRange(outlet);
+            const imageUrl = outlet.image_url || getDefaultImage(index);
+            
+            return (
+              <motion.div
+                key={outlet.id}
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5, delay: index * 0.1 }}
+                className="overflow-hidden rounded-3xl border border-gold/30 bg-cream shadow-md hover:shadow-lg transition-shadow"
+              >
+                <div className="relative aspect-[4/3] overflow-hidden">
+                  <img
+                    src={imageUrl}
+                    alt={outlet.outlet_name}
+                    loading="lazy"
+                    className="h-full w-full object-cover"
+                  />
+                  <div className={`absolute left-3 top-3 inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-wider ${
+                    isOpen 
+                      ? "bg-green-100 text-green-700" 
+                      : "bg-red-100 text-red-700"
+                  }`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${
+                      isOpen ? "bg-green-600" : "bg-red-600"
+                    }`} />
+                    {isOpen ? "Open Now" : "Closed"}
+                  </div>
                 </div>
-              </div>
-              <div className="p-5">
-                <h3 className="text-display text-lg text-maroon">{o.name}</h3>
-                <p className="mt-2 flex items-start gap-2 text-sm text-maroon-deep/75">
-                  <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-saffron-deep" />
-                  {o.address}
-                </p>
-                <p className="mt-1 flex items-center gap-2 text-sm text-maroon-deep/75">
-                  <Clock className="h-4 w-4 text-saffron-deep" />
-                  {o.timings}
-                </p>
-                <Link
-                  to="/customer/outlets"
-                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-maroon px-5 py-2.5 text-sm font-medium text-cream transition hover:bg-maroon-deep"
-                >
-                  Order from this outlet
-                </Link>
-              </div>
-            </motion.div>
-          ))}
+                <div className="p-5">
+                  <h3 className="text-display text-lg text-maroon">
+                    {outlet.outlet_name}
+                  </h3>
+                  
+                  {outlet.address && (
+                    <p className="mt-2 flex items-start gap-2 text-sm text-maroon-deep/75">
+                      <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-saffron-deep" />
+                      <span>{outlet.address}</span>
+                    </p>
+                  )}
+                  
+                  {(outlet.city || outlet.state) && (
+                    <p className="mt-1 text-sm text-maroon-deep/60 pl-6">
+                      {[outlet.city, outlet.state].filter(Boolean).join(', ')}
+                    </p>
+                  )}
+                  
+                  <p className="mt-2 flex items-center gap-2 text-sm text-maroon-deep/75">
+                    <Clock className="h-4 w-4 text-saffron-deep" />
+                    {timeRange}
+                  </p>
+                  
+                  {outlet.phone && (
+                    <p className="mt-1 text-sm text-maroon-deep/60">
+                      📞 {outlet.phone}
+                    </p>
+                  )}
+                  
+                  <Link
+                    to="/customer/outlets"
+                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-maroon px-5 py-2.5 text-sm font-medium text-cream transition hover:bg-maroon-deep"
+                  >
+                    Order from this outlet
+                    <ChevronRight className="h-4 w-4" />
+                  </Link>
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -815,13 +894,13 @@ function CTA() {
         <div className="relative">
           <div className="mx-auto flex w-fit gap-3">
             <img
-              src={kostaLogo.url}
-              alt=""
+              src={kostaLogo}
+              alt="Kosta Rajula Ruchulu"
               className="h-14 w-14 rounded-full bg-cream object-contain ring-2 ring-gold/40"
             />
             <img
-              src={theeyagaLogo.url}
-              alt=""
+              src={theeyagaLogo}
+              alt="Theeyaga-Kaaranga"
               className="h-14 w-14 rounded-full bg-cream object-contain ring-2 ring-gold/40"
             />
           </div>
@@ -875,15 +954,11 @@ function Footer() {
         <div className="mt-10 grid gap-10 md:grid-cols-4">
           <div>
             <Link to="/" className="flex items-center gap-2">
-              <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-saffron to-saffron-deep text-cream">
-                <UtensilsCrossed className="h-5 w-5" />
-              </div>
-              <div className="leading-tight">
-                <p className="text-display text-base text-cream">Telugu Food</p>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-gold">
-                  Club
-                </p>
-              </div>
+              <img
+                src={headerLogo}
+                alt="Telugu Food Club"
+                className="h-12 w-auto object-contain"
+              />
             </Link>
             <p className="mt-4 text-sm text-cream/70">
               A premium Telugu food ecosystem celebrating the heritage of Andhra

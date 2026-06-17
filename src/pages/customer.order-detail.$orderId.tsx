@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";;
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useRequireCustomer } from "@/lib/use-require-customer";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@/lib/react-start-mock";
@@ -35,7 +35,7 @@ function timelineState(detail: Detail) {
 function OrderDetailScreen() {
   const ready = useRequireCustomer();
   const navigate = useNavigate();
-  const { orderId } = Route.useParams();
+  const { orderId = "" } = useParams<{ orderId: string }>();
   const fetchDetail = useServerFn(getMyOrderDetail);
   const [data, setData] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);
