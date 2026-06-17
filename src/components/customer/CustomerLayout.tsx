@@ -1,4 +1,4 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useLocation } from "react-router-dom";;
 import { Utensils, Store, ShoppingCart, ClipboardList, User } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCart } from "@/lib/cart-store";
@@ -13,7 +13,7 @@ const TABS: Tab[] = [
 ];
 
 export function CustomerLayout({ children }: { children: ReactNode }) {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const { pathname } = useLocation();
   const cart = useCart();
   const cartCount = cart.reduce((n, i) => n + i.qty, 0);
 

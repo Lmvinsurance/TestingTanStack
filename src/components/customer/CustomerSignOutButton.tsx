@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "react-router-dom";;
 import { LogOut, Loader2 } from "lucide-react";
 import { customerSignOut } from "@/lib/auth-helpers";
 
@@ -27,7 +27,7 @@ export function CustomerSignOutButton({
         setBusy(true);
         const ok = await customerSignOut({ confirm });
         setBusy(false);
-        if (ok) navigate({ to: redirectTo, replace: true });
+        if (ok) navigate(redirectTo, { replace: true });
       }}
       aria-label="Sign out"
       title="Sign out"

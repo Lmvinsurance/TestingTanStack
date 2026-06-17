@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "react-router-dom";;
 import { useEffect, useState, type ReactNode } from "react";
 import { Loader2, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -39,7 +39,7 @@ export function AdminGuard({ children }: { children: ReactNode }) {
       const { data: userData } = await supabase.auth.getUser();
       const user = userData?.user;
       if (!user) {
-        if (!cancelled) navigate({ to: "/admin/login", replace: true });
+        if (!cancelled) navigate("/admin/login", { replace: true });
         return;
       }
       const { data: admin, error } = await supabase
@@ -55,7 +55,7 @@ export function AdminGuard({ children }: { children: ReactNode }) {
             ? "Access denied. Please contact administrator."
             : "Your admin account is inactive. Please contact administrator.",
         );
-        navigate({ to: "/admin/login", replace: true });
+        navigate("/admin/login", { replace: true });
         return;
       }
       setStatus("ok");
@@ -63,7 +63,7 @@ export function AdminGuard({ children }: { children: ReactNode }) {
 
     check();
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_OUT") navigate({ to: "/admin/login", replace: true });
+      if (event === "SIGNED_OUT") navigate("/admin/login", { replace: true });
     });
     return () => {
       cancelled = true;

@@ -1,4 +1,4 @@
-import { createServerFn } from "@tanstack/react-start";
+import { createServerFn } from "@/lib/react-start-mock";
 
 /**
  * Unauthenticated, side-effect-free server check that simply reports which

@@ -1,4 +1,4 @@
-import { createServerFn } from "@tanstack/react-start";
+import { createServerFn } from "@/lib/react-start-mock";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 async function assertCustomerOwnsOrder(orderId: string, userId: string) {

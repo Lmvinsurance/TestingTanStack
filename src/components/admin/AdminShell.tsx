@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link } from "react-router-dom";;
 import { ArrowLeft, Bell } from "lucide-react";
 import type { ReactNode } from "react";
 import kostaLogo from "@/assets/kosta-rajula-ruchulu-logo.asset.json";

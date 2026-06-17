@@ -1,4 +1,4 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useLocation } from "react-router-dom";;
 import {
   LayoutDashboard, ShoppingBag, Utensils, Users, Store, Tag, Layers,
   Leaf, Soup, Sliders, DollarSign, PackageCheck, Image as ImageIcon,
@@ -12,7 +12,7 @@ import {
   SidebarProvider, SidebarTrigger, useSidebar,
 } from "@/components/ui/sidebar";
 import { adminSignOut } from "@/lib/auth-helpers";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "react-router-dom";;
 import { toast } from "sonner";
 import kostaLogo from "@/assets/kosta-rajula-ruchulu-logo.asset.json";
 
@@ -56,13 +56,13 @@ const NAV_GROUPS = [
 function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const { pathname } = useLocation();
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
     await adminSignOut();
     toast.success("Signed out");
-    navigate({ to: "/admin/login", replace: true });
+    navigate("/admin/login", { replace: true });
   };
 
   return (

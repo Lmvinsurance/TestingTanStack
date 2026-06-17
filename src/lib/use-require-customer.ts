@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "react-router-dom";;
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -17,7 +17,7 @@ export function useRequireCustomer() {
     const redirect = (message: string) => {
       if (cancelled) return;
       toast.error(message);
-      nav({ to: "/customer/signin", replace: true });
+      nav("/customer/signin", { replace: true });
     };
 
     const check = async () => {
@@ -56,7 +56,7 @@ export function useRequireCustomer() {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
-        nav({ to: "/customer/signin", replace: true });
+        nav("/customer/signin", { replace: true });
       }
     });
 
