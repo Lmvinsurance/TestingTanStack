@@ -7,6 +7,7 @@ export interface MenuCategory {
   description?: string;
   display_order: number;
   is_active: boolean;
+  image_url?: string;
   created_at: string;
   updated_at: string;
 }
@@ -193,7 +194,7 @@ class MenuService {
       ...item,
       category_name: category?.category_name,
       images: (images || []).filter(img => img.item_id === item.id)
-    }));
+    })) as unknown as MenuItemWithImages[];
   }
 
   /**
@@ -282,7 +283,7 @@ class MenuService {
         images: images || [],
         variants: variantsWithPrices,
         outlet_availability: availabilityError ? null : availability
-      };
+      } as unknown as MenuItemWithDetails;
     } catch (error) {
       console.error('Error in getMenuItemWithDetailsById:', error);
       return null;
@@ -375,7 +376,7 @@ class MenuService {
         images: images || [],
         variants: variantsWithPrices,
         outlet_availability: availabilityError ? null : availability
-      };
+      } as unknown as MenuItemWithDetails;
     } catch (error) {
       console.error('Error in getMenuItemWithDetails:', error);
       return null;

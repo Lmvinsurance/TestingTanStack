@@ -306,6 +306,7 @@ export function CustomerMenuPage() {
     const primaryImage = item.images?.find((img) => img.is_primary)?.image_url || item.images?.[0]?.image_url;
 
     const cartItemData = {
+      id: `${item.id}-${variant.id}`,
       outletId: outlet!.id,
       itemId: item.id,
       variantId: variant.id,

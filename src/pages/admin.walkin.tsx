@@ -183,6 +183,66 @@ function WalkinPage() {
     onError: (e: any) => toast.error(e?.message ?? "Verification failed"),
   });
 
+  const mockMut = useMutation({
+    mutationFn: async () => {
+      const order_items = cart.map((l) => {
+        const item = items.find((i) => i.id === l.itemId);
+        return {
+          item_id: Number(l.itemId) || l.itemId,
+          title: l.itemName,
+          description: "",
+          item_type: "NonVeg",
+          is_available: true,
+          image_url: (item as any)?.imageUrl ?? (item as any)?.image_url ?? "",
+          variants: { [l.variantName]: l.unitPrice },
+          variant: l.variantName,
+          price: l.unitPrice,
+          quantity: l.quantity,
+        };
+      });
+      const payload = {
+        mobilenumber: phone || "9878987988",
+        customer_name: name || "Walkin",
+        total_amount: grand,
+        order_status: "PENDING",
+        order_items,
+        order_type: "Online-Kompelly",
+        restaurant_id: 1,
+        payment_status: "PENDING",
+      };
+      const res = await fetch(
+        "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
+      const text = await res.text();
+      let data: any = text;
+      try { data = JSON.parse(text); } catch {}
+      if (!res.ok) throw new Error(typeof data === "string" ? data : data?.message ?? `HTTP ${res.status}`);
+      return data;
+    },
+    onSuccess: (data: any) => {
+      console.log("[mock phonepe]", data);
+      const url =
+        data?.result?.redirectUrl ??
+        data?.redirectUrl ??
+        data?.data?.instrumentResponse?.redirectInfo?.url ??
+        data?.url;
+      if (url) {
+        window.open(url, "_blank", "noopener,noreferrer");
+        toast.success("Mock PhonePe order created — opened checkout");
+      } else {
+        toast.success("Mock PhonePe order created");
+      }
+    },
+    onError: (e: any) => toast.error(e?.message ?? "Mock API failed"),
+  });
+
+
+
   const printDisabled = !placed || placed.status !== "paid";
 
   return (
@@ -310,6 +370,19 @@ function WalkinPage() {
                   })}
                 </div>
               </div>
+
+              {paymentMode === "upi" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!cart.length || mockMut.isPending}
+                  onClick={() => mockMut.mutate()}
+                  className="w-full border-dashed border-saffron text-maroon"
+                >
+                  {mockMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Mock PhonePe API (test)
+                </Button>
+              )}
             </>
           )}
 

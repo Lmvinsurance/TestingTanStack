@@ -9,16 +9,12 @@ const PHONEPE_HOSTS = {
     oauth: "https://api.phonepe.com/apis/identity-manager/v1/oauth/token",
     pg: "https://api.phonepe.com/apis/pg",
   },
-  uat: {
-    oauth: "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token",
-    pg: "https://api-preprod.phonepe.com/apis/pg-sandbox",
-  },
 };
 
 function hosts() {
-  const env = (Deno.env.get("PHONEPE_ENV") ?? "prod").toLowerCase();
-  return env === "uat" ? PHONEPE_HOSTS.uat : PHONEPE_HOSTS.prod;
+  return PHONEPE_HOSTS.prod;
 }
+
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 

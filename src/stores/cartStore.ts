@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { menuService } from '@/lib/supabase-menu.service';
+import { menuService as menuServiceTyped } from '@/lib/supabase-menu.service';
+const menuService = menuServiceTyped as any;
 
 export interface CartItem {
   id?: string; // Database ID (if synced)

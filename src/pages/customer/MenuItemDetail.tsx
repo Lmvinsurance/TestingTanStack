@@ -284,7 +284,7 @@ export function CustomerMenuItemDetail() {
         setLoading(true);
         
         // Get current outlet
-        const currentOutletId = await menuService.getCurrentOutletId();
+        const currentOutletId = await (menuService as any).getCurrentOutletId?.();
         setOutletId(currentOutletId);
 
         if (!currentOutletId) {
