@@ -1,57 +1,9 @@
-// PhonePe V2 Standard Checkout helper — SERVER ONLY.
-// Never import this from client-reachable modules at top level; use `await import()` inside handlers.
+// PhonePe V2 Standard Checkout helper.
+// In this SPA, "server functions" run in the browser, so calls to api.phonepe.com
+// would be CORS-blocked and would leak credentials. We proxy through the
+// `phonepe` Supabase edge function which holds the PhonePe client secret.
 
-const PHONEPE_HOSTS = {
-  prod: {
-    oauth: "https://api.phonepe.com/apis/identity-manager/v1/oauth/token",
-    pg: "https://api.phonepe.com/apis/pg",
-  },
-  uat: {
-    oauth: "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token",
-    pg: "https://api-preprod.phonepe.com/apis/pg-sandbox",
-  },
-};
-
-function hosts() {
-  const env = (process.env.PHONEPE_ENV ?? "prod").toLowerCase();
-  return env === "uat" ? PHONEPE_HOSTS.uat : PHONEPE_HOSTS.prod;
-}
-
-// In-memory token cache (best-effort; workers are stateless across instances).
-let cachedToken: { token: string; expiresAt: number } | null = null;
-
-export async function getPhonePeAccessToken(): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  if (cachedToken && cachedToken.expiresAt - 60 > now) return cachedToken.token;
-
-  const clientId = process.env.PHONEPE_CLIENT_ID;
-  const clientSecret = process.env.PHONEPE_CLIENT_SECRET;
-  const clientVersion = process.env.PHONEPE_CLIENT_VERSION ?? "1";
-  if (!clientId || !clientSecret) throw new Error("PhonePe credentials not configured");
-
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_version: clientVersion,
-    client_secret: clientSecret,
-    grant_type: "client_credentials",
-  });
-
-  const res = await fetch(hosts().oauth, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json?.access_token) {
-    throw new Error(`PhonePe OAuth failed: ${res.status} ${JSON.stringify(json)}`);
-  }
-  const expiresAt =
-    typeof json.expires_at === "number"
-      ? json.expires_at
-      : now + Number(json.expires_in ?? 3000);
-  cachedToken = { token: json.access_token as string, expiresAt };
-  return cachedToken.token;
-}
+import { supabase } from "@/integrations/supabase/client";
 
 export type PhonePeCreatePayload = {
   merchantOrderId: string;
@@ -61,31 +13,23 @@ export type PhonePeCreatePayload = {
   metaInfo?: Record<string, string>;
 };
 
-export async function phonepeCreatePayment(p: PhonePeCreatePayload) {
-  const token = await getPhonePeAccessToken();
-  const res = await fetch(`${hosts().pg}/checkout/v2/pay`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `O-Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      merchantOrderId: p.merchantOrderId,
-      amount: p.amountPaise,
-      expireAfter: 1200,
-      metaInfo: p.metaInfo ?? {},
-      paymentFlow: {
-        type: "PG_CHECKOUT",
-        message: p.message ?? "Order payment",
-        merchantUrls: { redirectUrl: p.redirectUrl },
-      },
-    }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json?.redirectUrl) {
-    throw new Error(`PhonePe create failed: ${res.status} ${JSON.stringify(json)}`);
+async function invokePhonePe(body: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke("phonepe", { body });
+  if (error) {
+    // Supabase wraps non-2xx as FunctionsHttpError; try to surface the upstream message.
+    const ctx: any = (error as any).context;
+    let detail = "";
+    try { detail = ctx ? await ctx.text() : ""; } catch { /* noop */ }
+    throw new Error(`PhonePe edge error: ${error.message}${detail ? ` — ${detail}` : ""}`);
   }
-  return json as {
+  if ((data as any)?.error) throw new Error((data as any).error);
+  return data as any;
+}
+
+export async function phonepeCreatePayment(p: PhonePeCreatePayload) {
+  const res = await invokePhonePe({ action: "create", ...p });
+  if (!res?.redirectUrl) throw new Error(`PhonePe create failed: ${JSON.stringify(res)}`);
+  return res as {
     orderId: string;
     state: string;
     expireAt: number;
@@ -94,16 +38,8 @@ export async function phonepeCreatePayment(p: PhonePeCreatePayload) {
 }
 
 export async function phonepeOrderStatus(merchantOrderId: string) {
-  const token = await getPhonePeAccessToken();
-  const res = await fetch(
-    `${hosts().pg}/checkout/v2/order/${encodeURIComponent(merchantOrderId)}/status?details=true`,
-    { headers: { Authorization: `O-Bearer ${token}` } },
-  );
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(`PhonePe status failed: ${res.status} ${JSON.stringify(json)}`);
-  }
-  return json as {
+  const res = await invokePhonePe({ action: "status", merchantOrderId });
+  return res as {
     orderId: string;
     state: "COMPLETED" | "FAILED" | "PENDING" | string;
     amount: number;

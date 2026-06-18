@@ -252,7 +252,11 @@ export const createWalkinOrder = createServerFn({ method: "POST" })
     if (data.paymentMode === "upi") {
       const { phonepeCreatePayment } = await import("./phonepe.server");
       const merchantOrderId = `${order.order_number}-${Date.now()}`;
-      const redirectUrl = `${process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "") || "https://telugufood.club"}/payment-status?orderId=${order.id}&method=phonepe&admin=1`;
+      const baseUrl =
+        (typeof window !== "undefined" && window.location?.origin) ||
+        process.env.PUBLIC_BASE_URL?.replace(/\/+$/, "") ||
+        "https://telugufood.club";
+      const redirectUrl = `${baseUrl}/payment-status?orderId=${order.id}&method=phonepe&admin=1`;
       try {
         const res = await phonepeCreatePayment({
           merchantOrderId,

@@ -1333,6 +1333,7 @@ export type Database = {
           deleted_by: string | null
           email: string | null
           id: string
+          image_url: string | null
           is_active: boolean
           is_deleted: boolean
           latitude: number | null
@@ -1356,6 +1357,7 @@ export type Database = {
           deleted_by?: string | null
           email?: string | null
           id?: string
+          image_url?: string | null
           is_active?: boolean
           is_deleted?: boolean
           latitude?: number | null
@@ -1379,6 +1381,7 @@ export type Database = {
           deleted_by?: string | null
           email?: string | null
           id?: string
+          image_url?: string | null
           is_active?: boolean
           is_deleted?: boolean
           latitude?: number | null
