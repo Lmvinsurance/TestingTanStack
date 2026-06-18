@@ -114,10 +114,8 @@ export default function App() {
             <Route path="/customer/item/:id" element={<CustomerItemDetails />} />
             <Route path="/customer/order/:orderId" element={<CustomerOrderDetail />} />
             <Route path="/payment-status" element={<PaymentStatus />} />
+            <Route path="/customer/menu" element={<CustomerMenuPage />} />
           </Route>
-          
-          {/* Menu page - WITHOUT the customer layout wrapper to avoid duplicate header */}
-          <Route path="/customer/menu" element={<CustomerMenuPage />} />
           
           <Route path="/admin/invoice/:orderId" element={<AdminInvoice />} />
         </Route>

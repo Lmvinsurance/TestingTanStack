@@ -28,7 +28,7 @@ const OUTLET_KEY = "krr_outlet_v1";
 const listeners = new Set<() => void>();
 function emit() {
   cachedCart = null;
-  cachedOutlet = null;
+  cachedOutlet = undefined;
   listeners.forEach((l) => l());
 }
 
@@ -52,8 +52,15 @@ export function getCart(): CartItem[] {
 }
 export function setCart(items: CartItem[]) { write(CART_KEY, items); }
 export function addToCart(item: CartItem) {
-  const cart = [...getCart(), { ...item, id: item.id || crypto.randomUUID() }];
-  setCart(cart);
+  const currentCart = getCart();
+  const existing = currentCart.find((c) => c.itemId === item.itemId && c.variantId === item.variantId);
+  if (existing) {
+    updateQty(existing.id, existing.qty + item.qty);
+  } else {
+    const id = item.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+    const cart = [...currentCart, { ...item, id }];
+    setCart(cart);
+  }
 }
 
 /** Returns the outletId all current cart items belong to, or null. */
@@ -80,15 +87,10 @@ const getServerCart = () => EMPTY_CART;
 export function useCart() {
   return useSyncExternalStore(subscribeCart, getCart, getServerCart);
 }
+const subscribeOutlet = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
+const getServerOutlet = () => null;
 export function useOutlet() {
-  const [o, setO] = useState<Outlet | null>(null);
-  useEffect(() => {
-    setO(getOutlet());
-    const cb = () => setO(getOutlet());
-    listeners.add(cb);
-    return () => { listeners.delete(cb); };
-  }, []);
-  return o;
+  return useSyncExternalStore(subscribeOutlet, getOutlet, getServerOutlet);
 }
 
 export function cartTotal(items: CartItem[]) {

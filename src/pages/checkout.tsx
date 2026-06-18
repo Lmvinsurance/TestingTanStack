@@ -127,6 +127,60 @@ function CheckoutScreen() {
       return;
     }
     setSubmitting(true);
+
+    try {
+      // 1. Outlet active
+      const { data: outletData } = await supabase
+        .from("outlets")
+        .select("is_active")
+        .eq("id", outlet.id)
+        .single();
+        
+      if (!outletData?.is_active) {
+        toast.error("This outlet is currently inactive.");
+        setSubmitting(false);
+        return;
+      }
+
+      // 2. Variants and Pricing
+      const variantIds = cart.map((c) => c.variantId);
+      const itemIds = cart.map((c) => c.itemId);
+      
+      const [pricesRes, availabilityRes] = await Promise.all([
+        supabase.from("outlet_variant_prices").select("variant_id, selling_price, is_available").eq("outlet_id", outlet.id).in("variant_id", variantIds),
+        supabase.from("outlet_item_availability").select("item_id, is_available, stock_status").eq("outlet_id", outlet.id).in("item_id", itemIds)
+      ]);
+      
+      const prices = pricesRes.data || [];
+      const availability = availabilityRes.data || [];
+      
+      for (const item of cart) {
+        const p = prices.find((x) => x.variant_id === item.variantId);
+        const a = availability.find((x) => x.item_id === item.itemId);
+        
+        if (!p) {
+          toast.error(`${item.name} (${item.variant}) is no longer available at this outlet.`);
+          setSubmitting(false); return;
+        }
+        if (!p.is_available) {
+          toast.error(`${item.name} (${item.variant}) variant is currently unavailable.`);
+          setSubmitting(false); return;
+        }
+        if (Number(p.selling_price) !== item.price) {
+          toast.error(`Price updated for ${item.name}. Please clear cart and add again.`);
+          setSubmitting(false); return;
+        }
+        if (!a || !a.is_available || a.stock_status === 'sold_out') {
+          toast.error(`${item.name} is currently sold out.`);
+          setSubmitting(false); return;
+        }
+      }
+    } catch (e) {
+      toast.error("Error validating cart items.");
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const result = await placeOrder({
         data: {

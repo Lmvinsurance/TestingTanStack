@@ -14,9 +14,6 @@ function ScrollToTop() {
 }
 
 function ShellSwitch({ children }: { children: React.ReactNode }) {
-  const { pathname } = useLocation();
-  const isCustomerShell = CUSTOMER_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
-  if (isCustomerShell) return <CustomerLayout>{children}</CustomerLayout>;
   return <>{children}</>;
 }
 

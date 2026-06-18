@@ -38,6 +38,7 @@ export type OutletRow = {
   closing_time: string | null;
   is_active: boolean;
   created_at: string;
+  image_url: string | null; // ADDED: image_url field
 };
 
 export const listOutlets = createServerFn({ method: "GET" })
@@ -48,7 +49,7 @@ export const listOutlets = createServerFn({ method: "GET" })
     let q = supabaseAdmin
       .from("outlets")
       .select(
-        "id, outlet_name, outlet_code, phone, email, address, city, state, pincode, latitude, longitude, opening_time, closing_time, is_active, created_at",
+        "id, outlet_name, outlet_code, phone, email, address, city, state, pincode, latitude, longitude, opening_time, closing_time, is_active, created_at, image_url" // ADDED: image_url
       )
       .eq("is_deleted", false)
       .order("created_at", { ascending: false });
@@ -84,7 +85,7 @@ type OutletInput = {
   opening_time?: string | null;
   closing_time?: string | null;
   is_active: boolean;
-  image_url?: string | null; // ADD THIS
+  image_url?: string | null; // ADDED: image_url
 };
 
 // Update the upsertOutlet function
@@ -113,7 +114,7 @@ export const upsertOutlet = createServerFn({ method: "POST" })
       opening_time: data.opening_time || null,
       closing_time: data.closing_time || null,
       is_active: data.is_active,
-      image_url: data.image_url || null, // ADD THIS - CRITICAL FIX
+      image_url: data.image_url || null, // ADDED: image_url - CRITICAL FIX
       updated_by: admin.id,
     };
     if (data.id) {

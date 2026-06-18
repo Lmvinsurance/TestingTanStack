@@ -55,7 +55,7 @@ function CustomerSignIn() {
         throw new Error("Invalid email or password.");
       }
 
-      const { data: customer, error: profileError } = await supabase
+      let { data: customer, error: profileError } = await supabase
         .from("customers")
         .select("id, is_active, is_deleted, full_name")
         .eq("supabase_user_id", auth.user.id)
@@ -66,10 +66,29 @@ function CustomerSignIn() {
         await supabase.auth.signOut();
         throw new Error("Could not load your profile. Please try again.");
       }
+      
+      // Auto-create missing customer profile to recover "stuck" accounts
       if (!customer) {
-        await supabase.auth.signOut();
-        throw new Error("Customer profile not found. Please sign up first.");
+        const metadata = auth.user.user_metadata || {};
+        const { data: newCustomer, error: insertError } = await supabase
+          .from("customers")
+          .insert({
+            supabase_user_id: auth.user.id,
+            full_name: metadata.full_name || auth.user.email?.split("@")[0] || "Customer",
+            phone: metadata.phone || null,
+            email: auth.user.email,
+            is_active: true,
+          })
+          .select("id, is_active, is_deleted, full_name")
+          .single();
+
+        if (insertError || !newCustomer) {
+          await supabase.auth.signOut();
+          throw new Error("Customer profile not found and could not be created. Please contact support.");
+        }
+        customer = newCustomer;
       }
+
       if (!customer.is_active) {
         await supabase.auth.signOut();
         throw new Error("Your account is inactive. Please contact support.");

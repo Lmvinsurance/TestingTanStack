@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 type ServerFnContext = {
   userId: string;
+  supabase?: any;
 };
 
 type HandlerArg = { data: any; context: any };
@@ -34,7 +35,10 @@ export function createServerFn<TInput = any, TOutput = any>(_options?: any): Ser
       return async function execute(args?: { data?: any }) {
         const validatedData = validatorFn(args?.data);
         const { data: { session } } = await supabase.auth.getSession();
-        const context: ServerFnContext = { userId: session?.user?.id || "unauthenticated" };
+        const context: ServerFnContext = { 
+          userId: session?.user?.id || "unauthenticated",
+          supabase: supabase
+        };
         return await handlerFn({ data: validatedData, context });
       };
     },

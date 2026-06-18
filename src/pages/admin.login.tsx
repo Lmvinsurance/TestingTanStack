@@ -58,17 +58,6 @@ function AdminLoginScreen() {
         nav("/admin/dashboard", { replace: true });
         return;
       }
-      const { data: customer } = await supabase
-        .from("customers")
-        .select("is_active, is_deleted")
-        .eq("supabase_user_id", data.user.id)
-        .eq("is_deleted", false)
-        .maybeSingle();
-      if (cancelled) return;
-      if (customer?.is_active) {
-        toast.info("This is the admin login. Redirecting you to your account.");
-        nav("/customer/outlets", { replace: true });
-      }
     })();
     return () => { cancelled = true; };
   }, [nav]);

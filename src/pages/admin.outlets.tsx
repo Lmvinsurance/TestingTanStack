@@ -347,111 +347,96 @@ function OutletAdmin() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04 }}
-                className="overflow-hidden rounded-3xl border border-gold/25 bg-card/80 shadow-sm backdrop-blur"
+                className="overflow-hidden rounded-3xl border border-gold/25 bg-card/80 p-4 shadow-sm backdrop-blur"
               >
-                {/* Image Header */}
-                <div className="relative h-32 bg-gradient-to-br from-saffron/20 to-gold/10">
-                  {o.image_url ? (
-                    <>
+                <div className="flex gap-4">
+                  {/* Circular Image */}
+                  <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-full border-2 border-gold/30 bg-gradient-to-br from-saffron/20 to-gold/10">
+                    {o.image_url ? (
                       <img 
                         src={o.image_url} 
                         alt={o.outlet_name}
                         className="h-full w-full object-cover"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
-                    </>
-                  ) : (
-                    <div className="absolute inset-0 grid place-items-center text-maroon/20">
-                      <Store className="h-12 w-12" />
-                    </div>
-                  )}
-                  
-                  <span
-                    className={`absolute left-3 top-3 inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-semibold text-white shadow-lg ${
-                      o.is_active ? "bg-emerald-500/90" : "bg-red-500/90"
-                    }`}
-                  >
-                    <span className="h-1.5 w-1.5 rounded-full bg-white" />
-                    {o.is_active ? "Active" : "Inactive"}
-                  </span>
-                  
-                  <span className="absolute right-3 top-3 rounded-full bg-black/60 backdrop-blur-sm px-3 py-1 text-[10px] font-bold text-white shadow-lg">
-                    {o.outlet_code}
-                  </span>
-                  
-                  {o.image_url && canManage && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteImage(o);
-                      }}
-                      className="absolute bottom-3 right-3 rounded-full bg-red-500/90 p-2 text-white hover:bg-red-600 transition-colors shadow-lg"
-                      title="Remove image"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-
-                  <div className="absolute bottom-3 left-3 right-3">
-                    <h3 className="text-display text-lg font-bold text-white drop-shadow-lg">
-                      {o.outlet_name}
-                    </h3>
-                  </div>
-                </div>
-                
-                <div className="p-4">
-                  {(o.address || o.city) && (
-                    <p className="inline-flex items-start gap-1.5 text-xs text-maroon-deep/70">
-                      <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-saffron" />
-                      <span>
-                        {[o.address, o.city, o.state, o.pincode].filter(Boolean).join(", ")}
-                      </span>
-                    </p>
-                  )}
-                  
-                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-xs text-maroon-deep/70">
-                    {o.phone && (
-                      <span className="inline-flex items-center gap-1.5 truncate">
-                        <Phone className="h-3.5 w-3.5 text-saffron" /> {o.phone}
-                      </span>
-                    )}
-                    {o.email && (
-                      <span className="inline-flex items-center gap-1.5 truncate">
-                        <Mail className="h-3.5 w-3.5 text-saffron" /> {o.email}
-                      </span>
-                    )}
-                    {(o.opening_time || o.closing_time) && (
-                      <span className="col-span-2 inline-flex items-center gap-1.5">
-                        <Clock className="h-3.5 w-3.5 text-saffron" />
-                        {fmtTime(o.opening_time)} – {fmtTime(o.closing_time)}
-                      </span>
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-maroon/20">
+                        <Store className="h-8 w-8" />
+                      </div>
                     )}
                   </div>
                   
-                  {canManage && (
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => {
-                          setEditing(o);
-                          setFormOpen(true);
-                        }}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-gold/40 py-2.5 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
-                      >
-                        <Edit className="h-3.5 w-3.5" /> Edit
-                      </button>
-                      <button
-                        onClick={() => setConfirmToggle(o)}
-                        className={`inline-flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-semibold transition-colors ${
-                          o.is_active
-                            ? "border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
-                            : "bg-gradient-to-r from-saffron to-saffron-deep text-cream shadow hover:shadow-lg"
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h3 className="text-display text-base font-bold text-maroon truncate">
+                          {o.outlet_name}
+                        </h3>
+                        <p className="text-[10px] font-semibold text-maroon-deep/60">
+                          {o.outlet_code}
+                        </p>
+                      </div>
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
+                          o.is_active 
+                            ? "bg-emerald-500/10 text-emerald-700" 
+                            : "bg-red-500/10 text-red-700"
                         }`}
                       >
-                        <Power className="h-3.5 w-3.5" />
-                        {o.is_active ? "Deactivate" : "Activate"}
-                      </button>
+                        <span className={`h-1.5 w-1.5 rounded-full ${
+                          o.is_active ? "bg-emerald-500" : "bg-red-500"
+                        }`} />
+                        {o.is_active ? "Active" : "Inactive"}
+                      </span>
                     </div>
-                  )}
+
+                    {(o.address || o.city) && (
+                      <p className="mt-1 inline-flex items-start gap-1.5 text-xs text-maroon-deep/70">
+                        <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-saffron" />
+                        <span className="line-clamp-1">
+                          {[o.address, o.city].filter(Boolean).join(", ")}
+                        </span>
+                      </p>
+                    )}
+                    
+                    <div className="mt-1.5 flex flex-wrap gap-2 text-xs text-maroon-deep/70">
+                      {o.phone && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Phone className="h-3 w-3 text-saffron" /> {o.phone}
+                        </span>
+                      )}
+                      {(o.opening_time || o.closing_time) && (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Clock className="h-3 w-3 text-saffron" />
+                          {fmtTime(o.opening_time)} – {fmtTime(o.closing_time)}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {canManage && (
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          onClick={() => {
+                            setEditing(o);
+                            setFormOpen(true);
+                          }}
+                          className="inline-flex items-center justify-center gap-1 rounded-xl border border-gold/40 px-3 py-1.5 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
+                        >
+                          <Edit className="h-3 w-3" /> Edit
+                        </button>
+                        <button
+                          onClick={() => setConfirmToggle(o)}
+                          className={`inline-flex items-center justify-center gap-1 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            o.is_active
+                              ? "border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                              : "bg-gradient-to-r from-saffron to-saffron-deep text-cream shadow hover:shadow-lg"
+                          }`}
+                        >
+                          <Power className="h-3 w-3" />
+                          {o.is_active ? "Deactivate" : "Activate"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             ))}
@@ -518,7 +503,7 @@ function SkeletonList() {
   return (
     <div className="space-y-3">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="h-44 animate-pulse rounded-3xl bg-card/70" />
+        <div key={i} className="h-28 animate-pulse rounded-3xl bg-card/70" />
       ))}
     </div>
   );

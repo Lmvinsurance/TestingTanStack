@@ -120,7 +120,7 @@ class MenuService {
   /**
    * Get menu items by category with images
    */
-  async getMenuItemsByCategory(categoryId: string): Promise<MenuItemWithImages[]> {
+  async getMenuItemsByCategory(categoryId: string, outletId?: string): Promise<MenuItemWithImages[]> {
     // First get the menu items
     const { data: items, error: itemsError } = await supabase
       .from('menu_items')
@@ -139,12 +139,41 @@ class MenuService {
       return [];
     }
 
-    // Get images for these items
-    const itemIds = items.map(item => item.id);
+    let filteredItems = items;
+
+    // Filter by outlet availability if outletId is provided
+    if (outletId) {
+      const itemIds = items.map(item => item.id);
+      const { data: availabilityData, error: availabilityError } = await supabase
+        .from('outlet_item_availability')
+        .select('item_id, is_available')
+        .eq('outlet_id', outletId)
+        .in('item_id', itemIds);
+
+      if (!availabilityError && availabilityData) {
+        // Only keep items that are explicitly available at this outlet
+        const availableItemIds = new Set(
+          availabilityData
+            .filter(a => a.is_available)
+            .map(a => a.item_id)
+        );
+        filteredItems = items.filter(item => availableItemIds.has(item.id));
+      } else {
+        // If there's an error or no availability data, maybe assume none are available
+        filteredItems = [];
+      }
+    }
+
+    if (filteredItems.length === 0) {
+      return [];
+    }
+
+    // Get images for these filtered items
+    const filteredItemIds = filteredItems.map(item => item.id);
     const { data: images, error: imagesError } = await supabase
       .from('item_images')
       .select('*')
-      .in('item_id', itemIds)
+      .in('item_id', filteredItemIds)
       .order('display_order');
 
     if (imagesError) {
@@ -160,7 +189,7 @@ class MenuService {
       .single();
 
     // Combine items with their images
-    return items.map(item => ({
+    return filteredItems.map(item => ({
       ...item,
       category_name: category?.category_name,
       images: (images || []).filter(img => img.item_id === item.id)
