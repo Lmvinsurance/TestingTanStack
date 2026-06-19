@@ -7,6 +7,7 @@ import { AdminLayout } from "@/components/admin/AdminLayout";
 import { AdminHeader, AdminPage } from "@/components/admin/AdminShell";
 import { AdminGuard } from "@/components/admin/AdminGuard";
 import { Button } from "@/components/ui/button";
+import axios from "axios";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
@@ -183,6 +184,10 @@ function WalkinPage() {
     onError: (e: any) => toast.error(e?.message ?? "Verification failed"),
   });
 
+  
+
+// ... other imports remain the same ...
+
   const mockMut = useMutation({
     mutationFn: async () => {
       const order_items = cart.map((l) => {
@@ -210,19 +215,33 @@ function WalkinPage() {
         restaurant_id: 1,
         payment_status: "PENDING",
       };
-      const res = await fetch(
-        "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-      );
-      const text = await res.text();
-      let data: any = text;
-      try { data = JSON.parse(text); } catch {}
-      if (!res.ok) throw new Error(typeof data === "string" ? data : data?.message ?? `HTTP ${res.status}`);
-      return data;
+      
+      try {
+        const response = await axios.post(
+          "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
+          payload,
+          {
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+        return response.data;
+      } catch (error: any) {
+        if (error.response) {
+          // The request was made and the server responded with a status code
+          // that falls out of the range of 2xx
+          throw new Error(
+            typeof error.response.data === "string" 
+              ? error.response.data 
+              : error.response.data?.message || `HTTP ${error.response.status}`
+          );
+        } else if (error.request) {
+          // The request was made but no response was received
+          throw new Error("No response received from server");
+        } else {
+          // Something happened in setting up the request that triggered an Error
+          throw new Error(error.message || "Request failed");
+        }
+      }
     },
     onSuccess: (data: any) => {
       console.log("[mock phonepe]", data);
