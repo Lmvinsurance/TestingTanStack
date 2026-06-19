@@ -1,9 +1,8 @@
 // @ts-nocheck
 import { Link } from "react-router-dom";;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, X, Bell, ChevronLeft, CreditCard, RefreshCcw, Loader2, AlertCircle, Inbox } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -22,18 +21,37 @@ function fmt(n: number) { return "₹" + Number(n || 0).toLocaleString("en-IN");
 
 function PaymentsAdmin() {
   const list = useServerFn(listAdminPayments);
-  const q = useQuery({ queryKey: ["admin", "payments"], queryFn: () => list(), retry: 1 });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [filter, setFilter] = useState<"All" | "success" | "failed" | "pending" | "refunded">("All");
   const [search, setSearch] = useState("");
   const [view, setView] = useState<string | null>(null);
   const [refund, setRefund] = useState<string | null>(null);
 
-  const customersById = useMemo(() => new Map((q.data?.customers ?? []).map((c: any) => [c.id, c])), [q.data]);
-  const ordersById = useMemo(() => new Map((q.data?.orders ?? []).map((o: any) => [o.id, o])), [q.data]);
-  const outletsById = useMemo(() => new Map((q.data?.outlets ?? []).map((o: any) => [o.id, o])), [q.data]);
+  const customersById = useMemo(() => new Map((data?.customers ?? []).map((c: any) => [c.id, c])), [data]);
+  const ordersById = useMemo(() => new Map((data?.orders ?? []).map((o: any) => [o.id, o])), [data]);
+  const outletsById = useMemo(() => new Map((data?.outlets ?? []).map((o: any) => [o.id, o])), [data]);
 
-  const payments = (q.data?.payments ?? []) as PaymentRow[];
+  const payments = (data?.payments ?? []) as PaymentRow[];
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -99,13 +117,13 @@ function PaymentsAdmin() {
           ))}
         </div>
 
-        {q.isLoading && <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>}
-        {q.isError && (
+        {isLoading && <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>}
+        {!!error && (
           <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700">
-            <AlertCircle className="mx-auto mb-2 h-5 w-5" />{(q.error as Error).message}
+            <AlertCircle className="mx-auto mb-2 h-5 w-5" />{(error as Error).message}
           </div>
         )}
-        {!q.isLoading && filtered.length === 0 && (
+        {!isLoading && filtered.length === 0 && (
           <div className="rounded-2xl border border-gold/30 bg-card p-8 text-center text-maroon-deep/60">
             <Inbox className="mx-auto mb-2 h-8 w-8" />
             <p className="text-sm">No payments found</p>

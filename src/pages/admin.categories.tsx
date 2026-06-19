@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Plus, X, Tag, Loader2, Power, Edit, Upload, Trash2 } from "lucide-react";
 import { AdminHeader, AdminPage, StatCard, Chip } from "@/components/admin/AdminShell";
@@ -63,56 +62,67 @@ async function deleteCategoryImage(imageUrl: string | null) {
 }
 
 function CategoriesAdmin() {
-  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Category | null>(null);
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
   const [q, setQ] = useState("");
 
-  // Fetch categories
-  const { data: categories = [], isLoading, error } = useQuery<Category[]>({
-    queryKey: ["admin", "categories"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("menu_categories")
-        .select("id, category_name, slug, description, display_order, is_active, image_url")
-        .eq("is_deleted", false)
-        .order("display_order", { ascending: true, nullsFirst: false })
-        .order("category_name");
-      if (error) throw error;
-      return (data ?? []) as Category[];
-    },
-  });
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [itemCounts, setItemCounts] = useState<Record<string, number>>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
-  // Fetch item counts
-  const { data: itemCounts = {} } = useQuery<Record<string, number>>({
-    queryKey: ["admin", "categories", "item-counts"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("menu_items")
-        .select("category_id")
-        .eq("is_deleted", false);
-      if (error) throw error;
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [catRes, countsRes] = await Promise.all([
+        supabase
+          .from("menu_categories")
+          .select("id, category_name, slug, description, display_order, is_active, image_url")
+          .eq("is_deleted", false)
+          .order("display_order", { ascending: true, nullsFirst: false })
+          .order("category_name"),
+        supabase
+          .from("menu_items")
+          .select("category_id")
+          .eq("is_deleted", false)
+      ]);
+
+      if (catRes.error) throw catRes.error;
+      if (countsRes.error) throw countsRes.error;
+
+      setCategories((catRes.data ?? []) as Category[]);
+
       const counts: Record<string, number> = {};
-      (data ?? []).forEach((r: any) => {
+      (countsRes.data ?? []).forEach((r: any) => {
         if (r.category_id) counts[r.category_id] = (counts[r.category_id] ?? 0) + 1;
       });
-      return counts;
-    },
-  });
+      setItemCounts(counts);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-  // Save mutation with image upload
-  const saveMut = useMutation({
-    mutationFn: async (payload: { 
-      id?: string; 
-      category_name: string; 
-      slug: string; 
-      description: string | null; 
-      display_order: number;
-      imageFile?: File | null;
-      existingImageUrl?: string | null;
-      removeImage?: boolean;
-    }) => {
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const [isSaving, setIsSaving] = useState(false);
+  const saveCategory = async (payload: { 
+    id?: string; 
+    category_name: string; 
+    slug: string; 
+    description: string | null; 
+    display_order: number;
+    imageFile?: File | null;
+    existingImageUrl?: string | null;
+    removeImage?: boolean;
+  }) => {
+    setIsSaving(true);
+    try {
       let imageUrl = payload.existingImageUrl || null;
 
       // If removeImage is true, delete the image
@@ -193,38 +203,41 @@ function CategoriesAdmin() {
           }
         }
       }
-    },
-    onSuccess: () => {
+
       toast.success("Category saved successfully");
-      qc.invalidateQueries({ queryKey: ["admin", "categories"] });
+      await loadData();
       setOpen(false);
       setEditing(null);
-    },
-    onError: (e: any) => {
+    } catch (e: any) {
       console.error('Save error:', e);
       toast.error(e?.message ?? "Failed to save category");
-    },
-  });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-  // Toggle active status
-  const toggleMut = useMutation({
-    mutationFn: async (cat: Category) => {
+  const [isToggling, setIsToggling] = useState(false);
+  const toggleCategory = async (cat: Category) => {
+    setIsToggling(true);
+    try {
       const { error } = await supabase
         .from("menu_categories")
         .update({ is_active: !cat.is_active })
         .eq("id", cat.id);
       if (error) throw error;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["admin", "categories"] });
+      await loadData();
       toast.success("Status updated");
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Update failed"),
-  });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Update failed");
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
-  // Delete image mutation
-  const deleteImageMut = useMutation({
-    mutationFn: async (cat: Category) => {
+  const [isDeletingImage, setIsDeletingImage] = useState(false);
+  const deleteImage = async (cat: Category) => {
+    setIsDeletingImage(true);
+    try {
       if (cat.image_url) {
         await deleteCategoryImage(cat.image_url);
         const { error } = await supabase
@@ -233,13 +246,14 @@ function CategoriesAdmin() {
           .eq("id", cat.id);
         if (error) throw error;
       }
-    },
-    onSuccess: () => {
       toast.success("Image removed successfully");
-      qc.invalidateQueries({ queryKey: ["admin", "categories"] });
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Failed to remove image"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Failed to remove image");
+    } finally {
+      setIsDeletingImage(false);
+    }
+  };
 
   const filtered = categories.filter((c) => {
     if (filter === "Active" && !c.is_active) return false;
@@ -347,16 +361,16 @@ function CategoriesAdmin() {
                   <Edit className="h-3 w-3" /> Edit
                 </button>
                 <button 
-                  onClick={() => toggleMut.mutate(c)} 
-                  disabled={toggleMut.isPending} 
+                  onClick={() => toggleCategory(c)} 
+                  disabled={isToggling} 
                   className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep hover:bg-saffron/10 transition-colors disabled:opacity-50"
                 >
                   <Power className="h-3 w-3" /> {c.is_active ? "Disable" : "Enable"}
                 </button>
                 {c.image_url && (
                   <button 
-                    onClick={() => deleteImageMut.mutate(c)} 
-                    disabled={deleteImageMut.isPending} 
+                    onClick={() => deleteImage(c)} 
+                    disabled={isDeletingImage} 
                     className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                   >
                     <Trash2 className="h-3 w-3" />
@@ -380,8 +394,8 @@ function CategoriesAdmin() {
           <CategoryFormSheet
             initial={editing}
             onClose={() => { setOpen(false); setEditing(null); }}
-            onSave={(payload) => saveMut.mutate(payload)}
-            saving={saveMut.isPending}
+            onSave={(payload) => saveCategory(payload)}
+            saving={isSaving}
           />
         )}
       </AnimatePresence>

@@ -1,8 +1,7 @@
 import { Link } from "react-router-dom";;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, X, Bell, ChevronLeft, FileText, Download, Loader2, AlertCircle, Inbox } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import jsPDF from "jspdf";
@@ -87,25 +86,43 @@ async function buildPdfBlob(args: {
 }
 
 function InvoicesAdmin() {
-  const qc = useQueryClient();
   const list = useServerFn(listAdminInvoices);
   const details = useServerFn(getInvoiceOrderDetails);
   const save = useServerFn(saveAdminInvoice);
 
-  const q = useQuery({ queryKey: ["admin", "invoices"], queryFn: () => list(), retry: 1 });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [filter, setFilter] = useState<"All" | "Today" | "Generated" | "Pending">("All");
   const [search, setSearch] = useState("");
   const [viewOrder, setViewOrder] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
 
-  const invoicesByOrder = useMemo(() => new Map((q.data?.invoices ?? []).map((i: any) => [i.order_id, i])), [q.data]);
-  const customersById = useMemo(() => new Map((q.data?.customers ?? []).map((c: any) => [c.id, c])), [q.data]);
-  const outletsById = useMemo(() => new Map((q.data?.outlets ?? []).map((o: any) => [o.id, o])), [q.data]);
+  const invoicesByOrder = useMemo(() => new Map((data?.invoices ?? []).map((i: any) => [i.order_id, i])), [data]);
+  const customersById = useMemo(() => new Map((data?.customers ?? []).map((c: any) => [c.id, c])), [data]);
+  const outletsById = useMemo(() => new Map((data?.outlets ?? []).map((o: any) => [o.id, o])), [data]);
 
   // Rows: every order, with either its invoice or a pending placeholder
   const rows = useMemo(() => {
-    const orders = q.data?.orders ?? [];
+    const orders = data?.orders ?? [];
     return orders
       .filter((o: any) => ["paid", "cash_on_delivery", "completed"].includes((o.payment_status || "").toLowerCase()) || invoicesByOrder.has(o.id))
       .map((o: any) => ({ order: o, invoice: invoicesByOrder.get(o.id) }))
@@ -114,7 +131,7 @@ function InvoicesAdmin() {
         const bt = b.invoice?.generated_at ?? b.order.created_at;
         return new Date(bt).getTime() - new Date(at).getTime();
       });
-  }, [q.data, invoicesByOrder]);
+  }, [data, invoicesByOrder]);
 
   const filtered = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -134,45 +151,59 @@ function InvoicesAdmin() {
 
   const totals = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const invs = q.data?.invoices ?? [];
+    const invs = data?.invoices ?? [];
     return {
       total: invs.length,
       todayCount: invs.filter((i: any) => new Date(i.generated_at).getTime() >= today.getTime()).length,
       todayAmount: invs.filter((i: any) => new Date(i.generated_at).getTime() >= today.getTime()).reduce((s: number, i: any) => s + Number(i.invoice_amount || 0), 0),
       pending: rows.filter((r: any) => !r.invoice).length,
     };
-  }, [q.data, rows]);
+  }, [data, rows]);
 
-  const detailsQ = useQuery({
-    queryKey: ["admin", "invoice-details", viewOrder],
-    queryFn: () => details({ data: { order_id: viewOrder! } }),
-    enabled: !!viewOrder,
-  });
+  const [detailsData, setDetailsData] = useState<any>(null);
+  const [isDetailsLoading, setIsDetailsLoading] = useState(false);
 
-  const saveMut = useMutation({
-    mutationFn: (v: any) => save({ data: v }),
-  });
+  useEffect(() => {
+    if (!viewOrder) {
+      setDetailsData(null);
+      return;
+    }
+    let active = true;
+    const fetchDetails = async () => {
+      setIsDetailsLoading(true);
+      try {
+        const res = await details({ data: { order_id: viewOrder } });
+        if (active) setDetailsData(res);
+      } catch (err: any) {
+        toast.error(err.message || "Failed to load details");
+      } finally {
+        if (active) setIsDetailsLoading(false);
+      }
+    };
+    fetchDetails();
+    return () => { active = false; };
+  }, [viewOrder, details]);
 
   const generate = async () => {
-    if (!detailsQ.data) return;
+    if (!detailsData) return;
     setWorking(true);
     try {
-      const { order, items, addons, payments, customer, outlet } = detailsQ.data;
+      const { order, items, addons, payments, customer, outlet } = detailsData;
       const invoiceNumber = makeInvoiceNumber(outlet?.outlet_code ?? null);
       const blob = await buildPdfBlob({ order, items, addons, payments, customer, outlet, invoiceNumber });
       const path = `invoices/${order.id}/${invoiceNumber}.pdf`;
       const up = await supabase.storage.from(BUCKET).upload(path, blob, { contentType: "application/pdf", upsert: true });
       if (up.error) throw up.error;
       const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      await saveMut.mutateAsync({
+      await save({ data: {
         order_id: order.id,
         invoice_number: invoiceNumber,
         invoice_amount: Number(order.grand_total),
         tax_amount: Number(order.tax_amount),
         invoice_url: pub.publicUrl,
-      });
+      }});
       toast.success(`Invoice ${invoiceNumber} generated`);
-      qc.invalidateQueries({ queryKey: ["admin", "invoices"] });
+      await loadData();
     } catch (e: any) {
       const msg = e?.message ?? "Failed";
       toast.error(msg.includes("Bucket not found") ? "Bucket 'invoice-pdfs' missing — create it in Supabase Storage." : msg);
@@ -212,9 +243,9 @@ function InvoicesAdmin() {
           ))}
         </div>
 
-        {q.isLoading && <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>}
-        {q.isError && <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700"><AlertCircle className="mx-auto mb-2 h-5 w-5" />{(q.error as Error).message}</div>}
-        {!q.isLoading && filtered.length === 0 && <div className="rounded-2xl border border-gold/30 bg-card p-8 text-center text-maroon-deep/60"><Inbox className="mx-auto mb-2 h-8 w-8" /><p className="text-sm">No invoices</p></div>}
+        {isLoading && <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>}
+        {!!error && <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700"><AlertCircle className="mx-auto mb-2 h-5 w-5" />{(error as Error).message}</div>}
+        {!isLoading && filtered.length === 0 && <div className="rounded-2xl border border-gold/30 bg-card p-8 text-center text-maroon-deep/60"><Inbox className="mx-auto mb-2 h-8 w-8" /><p className="text-sm">No invoices</p></div>}
 
         <div className="space-y-3">
           {filtered.map(({ order, invoice }: any) => {
@@ -266,10 +297,10 @@ function InvoicesAdmin() {
                 <button onClick={() => !working && setViewOrder(null)} className="grid h-9 w-9 place-items-center rounded-full border border-gold/40"><X className="h-4 w-4" /></button>
               </div>
 
-              {detailsQ.isLoading ? (
+              {isDetailsLoading ? (
                 <div className="mt-6 grid place-items-center"><Loader2 className="h-6 w-6 animate-spin text-maroon" /></div>
-              ) : detailsQ.data ? (
-                <PreviewBody d={detailsQ.data} existing={invoicesByOrder.get(viewOrder) as any} />
+              ) : detailsData ? (
+                <PreviewBody d={detailsData} existing={invoicesByOrder.get(viewOrder) as any} />
               ) : null}
 
               <div className="mt-3 grid grid-cols-2 gap-2">
@@ -281,7 +312,7 @@ function InvoicesAdmin() {
                     </button>
                   </>
                 ) : (
-                  <button onClick={generate} disabled={working || !detailsQ.data} className="col-span-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream disabled:opacity-50">
+                  <button onClick={generate} disabled={working || !detailsData} className="col-span-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream disabled:opacity-50">
                     {working ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Generate Invoice & Upload PDF"}
                   </button>
                 )}

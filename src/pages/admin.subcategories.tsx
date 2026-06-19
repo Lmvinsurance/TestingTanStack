@@ -1,6 +1,5 @@
 ;
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Plus, X, Layers, Loader2, Power, Edit } from "lucide-react";
 import { AdminHeader, AdminPage, StatCard, Chip } from "@/components/admin/AdminShell";
@@ -22,43 +21,48 @@ type Subcategory = {
 type Category = { id: string; category_name: string };
 
 function SubcategoriesAdmin() {
-  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Subcategory | null>(null);
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
   const [catFilter, setCatFilter] = useState<string>("");
   const [q, setQ] = useState("");
 
-  const { data: cats = [] } = useQuery<Category[]>({
-    queryKey: ["admin", "categories", "compact"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("menu_categories")
-        .select("id, category_name")
-        .eq("is_deleted", false)
-        .order("category_name");
-      if (error) throw error;
-      return (data ?? []) as Category[];
-    },
-  });
+  const [cats, setCats] = useState<Category[]>([]);
+  const [subs, setSubs] = useState<Subcategory[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
-  const { data: subs = [], isLoading, error } = useQuery<Subcategory[]>({
-    queryKey: ["admin", "subcategories"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("menu_subcategories")
-        .select("id, category_id, subcategory_name, slug, description, display_order, is_active")
-        .eq("is_deleted", false)
-        .order("subcategory_name");
-      if (error) throw error;
-      return (data ?? []) as Subcategory[];
-    },
-  });
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [catsRes, subsRes] = await Promise.all([
+        supabase.from("menu_categories").select("id, category_name").eq("is_deleted", false).order("category_name"),
+        supabase.from("menu_subcategories").select("id, category_id, subcategory_name, slug, description, display_order, is_active").eq("is_deleted", false).order("subcategory_name")
+      ]);
+
+      if (catsRes.error) throw catsRes.error;
+      if (subsRes.error) throw subsRes.error;
+
+      setCats(catsRes.data as Category[]);
+      setSubs(subsRes.data as Subcategory[]);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const catName = (id: string) => cats.find((c) => c.id === id)?.category_name ?? "—";
 
-  const saveMut = useMutation({
-    mutationFn: async (payload: { id?: string; category_id: string; subcategory_name: string; slug: string; description: string | null; display_order: number }) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSave = async (payload: { id?: string; category_id: string; subcategory_name: string; slug: string; description: string | null; display_order: number }) => {
+    setIsSaving(true);
+    try {
       if (payload.id) {
         const { error } = await supabase
           .from("menu_subcategories")
@@ -82,27 +86,33 @@ function SubcategoriesAdmin() {
         });
         if (error) throw error;
       }
-    },
-    onSuccess: () => {
       toast.success("Saved");
-      qc.invalidateQueries({ queryKey: ["admin", "subcategories"] });
+      await loadData();
       setOpen(false);
       setEditing(null);
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Save failed"),
-  });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-  const toggleMut = useMutation({
-    mutationFn: async (s: Subcategory) => {
+  const [isToggling, setIsToggling] = useState(false);
+  const handleToggle = async (s: Subcategory) => {
+    setIsToggling(true);
+    try {
       const { error } = await supabase
         .from("menu_subcategories")
         .update({ is_active: !s.is_active })
         .eq("id", s.id);
       if (error) throw error;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "subcategories"] }),
-    onError: (e: any) => toast.error(e?.message ?? "Update failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Update failed");
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   const filtered = subs.filter((s) => {
     if (filter === "Active" && !s.is_active) return false;
@@ -161,7 +171,7 @@ function SubcategoriesAdmin() {
               {s.description && <p className="mt-2 line-clamp-2 text-[11px] text-maroon-deep/60">{s.description}</p>}
               <div className="mt-3 grid grid-cols-2 gap-1.5 border-t border-gold/15 pt-2 text-[11px] font-semibold">
                 <button onClick={() => openEdit(s)} className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-maroon"><Edit className="h-3 w-3" /> Edit</button>
-                <button onClick={() => toggleMut.mutate(s)} disabled={toggleMut.isPending} className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep"><Power className="h-3 w-3" /> {s.is_active ? "Disable" : "Enable"}</button>
+                <button onClick={() => handleToggle(s)} disabled={isToggling} className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep"><Power className="h-3 w-3" /> {s.is_active ? "Disable" : "Enable"}</button>
               </div>
             </motion.div>
           ))}
@@ -178,8 +188,8 @@ function SubcategoriesAdmin() {
             cats={cats}
             initial={editing}
             onClose={() => { setOpen(false); setEditing(null); }}
-            onSave={(payload) => saveMut.mutate(payload)}
-            saving={saveMut.isPending}
+            onSave={(payload) => handleSave(payload)}
+            saving={isSaving}
           />
         )}
       </AnimatePresence>

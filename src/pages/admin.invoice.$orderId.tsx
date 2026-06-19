@@ -1,6 +1,5 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useServerFn } from "@/lib/react-start-mock";
-import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { getInvoicePrintData } from "@/lib/admin-walkin.functions";
@@ -21,22 +20,38 @@ function InvoicePage() {
   const search = { format: (sp.get("format") as "thermal" | "a4") || "thermal", print: Number(sp.get("print") || 0) };
   const [format, setFormat] = useState<"thermal" | "a4">(search.format ?? "thermal");
   const fn = useServerFn(getInvoicePrintData);
-  const q = useQuery({
-    queryKey: ["invoice-print", orderId],
-    queryFn: () => fn({ data: { orderId } }),
-  });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (q.data && search.print) {
+    let active = true;
+    const fetchInvoice = async () => {
+      setIsLoading(true);
+      try {
+        const res = await fn({ data: { orderId } });
+        if (active) setData(res);
+      } catch (err: any) {
+        if (active) setError(err);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+    fetchInvoice();
+    return () => { active = false; };
+  }, [orderId, fn]);
+
+  useEffect(() => {
+    if (data && search.print) {
       const t = setTimeout(() => window.print(), 350);
       return () => clearTimeout(t);
     }
-  }, [q.data, search.print]);
+  }, [data, search.print]);
 
-  if (q.isLoading) return <p className="p-6 text-sm">Loading…</p>;
-  if (q.isError || !q.data) return <p className="p-6 text-sm text-destructive">Failed to load invoice.</p>;
+  if (isLoading) return <p className="p-6 text-sm">Loading…</p>;
+  if (error || !data) return <p className="p-6 text-sm text-destructive">Failed to load invoice.</p>;
 
-  const { order, outlet, items, invoice, payment, customer } = q.data;
+  const { order, outlet, items, invoice, payment, customer } = data;
   const isThermal = format === "thermal";
 
   return (

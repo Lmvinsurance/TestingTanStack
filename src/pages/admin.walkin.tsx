@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router-dom";;
 import { useServerFn } from "@/lib/react-start-mock";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { toast } from "sonner";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { AdminHeader, AdminPage } from "@/components/admin/AdminShell";
@@ -49,15 +48,51 @@ function WalkinPage() {
   const confirmFn = useServerFn(confirmCounterPayment);
   const verifyFn = useServerFn(verifyWalkinUpi);
 
-  const outletsQ = useQuery({ queryKey: ["walkin-outlets"], queryFn: () => outletsFn() });
-  const [outletId, setOutletId] = useState<string>("");
-  const effectiveOutletId = outletId || outletsQ.data?.defaultOutletId || outletsQ.data?.outlets[0]?.id || "";
+  const [outletsData, setOutletsData] = useState<any>(null);
+  const [outletsLoading, setOutletsLoading] = useState(true);
 
-  const menuQ = useQuery({
-    queryKey: ["walkin-menu", effectiveOutletId],
-    queryFn: () => menuFn({ data: { outletId: effectiveOutletId } }),
-    enabled: !!effectiveOutletId,
-  });
+  const [menuData, setMenuData] = useState<any>(null);
+  const [menuLoading, setMenuLoading] = useState(true);
+  const [menuError, setMenuError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const fetchOutlets = async () => {
+      setOutletsLoading(true);
+      try {
+        const res = await outletsFn();
+        if (active) setOutletsData(res);
+      } catch (err: any) {
+        // ignore err
+      } finally {
+        if (active) setOutletsLoading(false);
+      }
+    };
+    fetchOutlets();
+    return () => { active = false; };
+  }, [outletsFn]);
+
+  const [outletId, setOutletId] = useState<string>("");
+  const effectiveOutletId = outletId || outletsData?.defaultOutletId || outletsData?.outlets[0]?.id || "";
+
+  useEffect(() => {
+    let active = true;
+    if (!effectiveOutletId) return;
+    const fetchMenu = async () => {
+      setMenuLoading(true);
+      setMenuError(null);
+      try {
+        const res = await menuFn({ data: { outletId: effectiveOutletId } });
+        if (active) setMenuData(res);
+      } catch (err: any) {
+        if (active) setMenuError(err);
+      } finally {
+        if (active) setMenuLoading(false);
+      }
+    };
+    fetchMenu();
+    return () => { active = false; };
+  }, [effectiveOutletId, menuFn]);
 
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("");
@@ -72,8 +107,8 @@ function WalkinPage() {
 
   const [placed, setPlaced] = useState<PlacedOrder | null>(null);
 
-  const items = menuQ.data?.items ?? [];
-  const categories = menuQ.data?.categories ?? [];
+  const items = menuData?.items ?? [];
+  const categories = menuData?.categories ?? [];
 
   const filtered = useMemo(() => {
     const t = search.trim().toLowerCase();
@@ -124,9 +159,11 @@ function WalkinPage() {
   const tax = Math.round(taxable * ((Number(taxPct) || 0) / 100) * 100) / 100;
   const grand = Math.round((taxable + tax) * 100) / 100;
 
-  const placeMut = useMutation({
-    mutationFn: () =>
-      createFn({
+  const [isPlacing, setIsPlacing] = useState(false);
+  const handlePlaceOrder = async () => {
+    setIsPlacing(true);
+    try {
+      const res = await createFn({
         data: {
           outletId: effectiveOutletId,
           items: cart,
@@ -138,8 +175,7 @@ function WalkinPage() {
           taxPercent: Number(taxPct) || 0,
           notes: notes || null,
         },
-      }),
-    onSuccess: (res: any) => {
+      });
       toast.success(`Order ${res.orderNumber} placed`);
       setPlaced({
         orderId: res.orderId,
@@ -148,28 +184,37 @@ function WalkinPage() {
         redirectUrl: res.redirectUrl,
         status: res.paymentMode === "upi" ? "awaiting_upi" : "awaiting_collection",
       });
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Failed to place order"),
-  });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Failed to place order");
+    } finally {
+      setIsPlacing(false);
+    }
+  };
 
-  const collectMut = useMutation({
-    mutationFn: () =>
-      confirmFn({
+  const [isCollecting, setIsCollecting] = useState(false);
+  const handleCollect = async () => {
+    setIsCollecting(true);
+    try {
+      const res = await confirmFn({
         data: {
           orderId: placed!.orderId,
           mode: placed!.paymentMode === "cash" ? "cash" : "card_machine",
         },
-      }),
-    onSuccess: (res: any) => {
+      });
       toast.success("Payment collected, invoice generated");
       setPlaced((p) => (p ? { ...p, status: "paid", invoiceId: res.invoiceId } : p));
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Failed to confirm payment"),
-  });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Failed to confirm payment");
+    } finally {
+      setIsCollecting(false);
+    }
+  };
 
-  const verifyMut = useMutation({
-    mutationFn: () => verifyFn({ data: { orderId: placed!.orderId } }),
-    onSuccess: (res: any) => {
+  const [isVerifying, setIsVerifying] = useState(false);
+  const handleVerify = async () => {
+    setIsVerifying(true);
+    try {
+      const res = await verifyFn({ data: { orderId: placed!.orderId } });
       if (res.paymentStatus === "success") {
         toast.success("UPI payment verified");
         setPlaced((p) => (p ? { ...p, status: "paid" } : p));
@@ -180,16 +225,17 @@ function WalkinPage() {
         toast.message("Still pending — retry verify after customer pays");
         setPlaced((p) => (p ? { ...p, status: "upi_pending" } : p));
       }
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Verification failed"),
-  });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Verification failed");
+    } finally {
+      setIsVerifying(false);
+    }
+  };
 
-  
-
-// ... other imports remain the same ...
-
-  const mockMut = useMutation({
-    mutationFn: async () => {
+  const [isMocking, setIsMocking] = useState(false);
+  const handleMock = async () => {
+    setIsMocking(true);
+    try {
       const order_items = cart.map((l) => {
         const item = items.find((i) => i.id === l.itemId);
         return {
@@ -216,35 +262,12 @@ function WalkinPage() {
         payment_status: "PENDING",
       };
       
-      try {
-        const response = await axios.post(
-          "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
-          payload,
-          {
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-        return response.data;
-      } catch (error: any) {
-        if (error.response) {
-          // The request was made and the server responded with a status code
-          // that falls out of the range of 2xx
-          throw new Error(
-            typeof error.response.data === "string" 
-              ? error.response.data 
-              : error.response.data?.message || `HTTP ${error.response.status}`
-          );
-        } else if (error.request) {
-          // The request was made but no response was received
-          throw new Error("No response received from server");
-        } else {
-          // Something happened in setting up the request that triggered an Error
-          throw new Error(error.message || "Request failed");
-        }
-      }
-    },
-    onSuccess: (data: any) => {
-      console.log("[mock phonepe]", data);
+      const response = await axios.post(
+        "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
+        payload,
+        { headers: { "Content-Type": "application/json" } }
+      );
+      const data = response.data;
       const url =
         data?.result?.redirectUrl ??
         data?.redirectUrl ??
@@ -256,9 +279,18 @@ function WalkinPage() {
       } else {
         toast.success("Mock PhonePe order created");
       }
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Mock API failed"),
-  });
+    } catch (error: any) {
+      if (error.response) {
+        toast.error(typeof error.response.data === "string" ? error.response.data : error.response.data?.message || `HTTP ${error.response.status}`);
+      } else if (error.request) {
+        toast.error("No response received from server");
+      } else {
+        toast.error(error.message || "Request failed");
+      }
+    } finally {
+      setIsMocking(false);
+    }
+  };
 
 
 
@@ -274,7 +306,7 @@ function WalkinPage() {
             <Select value={effectiveOutletId} onValueChange={setOutletId} disabled={!!placed}>
               <SelectTrigger className="w-[240px]"><SelectValue placeholder="Select outlet" /></SelectTrigger>
               <SelectContent>
-                {(outletsQ.data?.outlets ?? []).map((o) => (
+                {(outletsData?.outlets ?? []).map((o: any) => (
                   <SelectItem key={o.id} value={o.id}>
                     {o.name}{o.city ? ` — ${o.city}` : ""}
                   </SelectItem>
@@ -294,9 +326,9 @@ function WalkinPage() {
             ))}
           </div>
 
-          {menuQ.isLoading && <p className="text-sm text-muted-foreground">Loading menu…</p>}
-          {menuQ.isError && <p className="text-sm text-destructive">Failed to load menu</p>}
-          {!menuQ.isLoading && filtered.length === 0 && (
+          {menuLoading && <p className="text-sm text-muted-foreground">Loading menu…</p>}
+          {!!menuError && <p className="text-sm text-destructive">Failed to load menu</p>}
+          {!menuLoading && filtered.length === 0 && (
             <p className="text-sm text-muted-foreground">No items available for this outlet.</p>
           )}
 
@@ -391,16 +423,16 @@ function WalkinPage() {
               </div>
 
               {paymentMode === "upi" && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={!cart.length || mockMut.isPending}
-                  onClick={() => mockMut.mutate()}
-                  className="w-full border-dashed border-saffron text-maroon"
-                >
-                  {mockMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Mock PhonePe API (test)
-                </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!cart.length || isMocking}
+                    onClick={() => handleMock()}
+                    className="w-full border-dashed border-saffron text-maroon"
+                  >
+                    {isMocking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Mock PhonePe API (test)
+                  </Button>
               )}
             </>
           )}
@@ -416,11 +448,11 @@ function WalkinPage() {
           {/* STEP 1: Place Order */}
           {!placed && (
             <Button
-              disabled={!cart.length || !effectiveOutletId || placeMut.isPending}
-              onClick={() => placeMut.mutate()}
+              disabled={!cart.length || !effectiveOutletId || isPlacing}
+              onClick={() => handlePlaceOrder()}
               className="w-full bg-gradient-to-br from-maroon to-maroon/80 text-cream"
             >
-              {placeMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {isPlacing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Place Order
             </Button>
           )}
@@ -428,11 +460,11 @@ function WalkinPage() {
           {/* STEP 2: Cash / Card → confirm collected */}
           {placed && placed.status === "awaiting_collection" && (
             <Button
-              disabled={collectMut.isPending}
-              onClick={() => collectMut.mutate()}
+              disabled={isCollecting}
+              onClick={() => handleCollect()}
               className="w-full bg-gradient-to-br from-saffron to-saffron-deep text-cream"
             >
-              {collectMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              {isCollecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
               {placed.paymentMode === "cash" ? "Confirm Cash Collected" : "Confirm Card Payment Collected"}
             </Button>
           )}
@@ -454,11 +486,11 @@ function WalkinPage() {
                 </a>
               )}
               <Button
-                disabled={verifyMut.isPending}
-                onClick={() => verifyMut.mutate()}
+                disabled={isVerifying}
+                onClick={() => handleVerify()}
                 className="w-full bg-gradient-to-br from-saffron to-saffron-deep text-cream"
               >
-                {verifyMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                {isVerifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                 Verify Payment
               </Button>
             </div>
@@ -472,7 +504,7 @@ function WalkinPage() {
               </div>
               <p>Please retry or choose another payment method.</p>
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => verifyMut.mutate()}>Retry Verify</Button>
+                <Button size="sm" variant="outline" onClick={() => handleVerify()}>Retry Verify</Button>
                 <Button size="sm" variant="outline" onClick={resetCart}>New Order</Button>
               </div>
             </div>

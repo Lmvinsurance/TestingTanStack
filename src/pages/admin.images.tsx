@@ -1,8 +1,7 @@
 ;
-import { useMemo, useState, useRef } from "react";
+import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Plus, X, Upload, Star, Trash2, Loader2, AlertTriangle, ImageIcon, Inbox, AlertCircle, RefreshCcw } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -37,14 +36,29 @@ async function uploadFile(itemId: string, file: File): Promise<string> {
 }
 
 function ImagesAdmin() {
-  const qc = useQueryClient();
-  const list = useServerFn(listAdminImages);
-  const create = useServerFn(createAdminImage);
-  const setPrimary = useServerFn(setPrimaryAdminImage);
   const replace = useServerFn(replaceAdminImage);
   const remove = useServerFn(deleteAdminImage);
 
-  const q = useQuery({ queryKey: ["admin", "images"], queryFn: () => list(), retry: 1 });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"All" | "Primary" | "Gallery" | "Missing" | "Recent">("All");
@@ -57,8 +71,8 @@ function ImagesAdmin() {
   const fileInput = useRef<HTMLInputElement>(null);
   const replaceInput = useRef<HTMLInputElement>(null);
 
-  const items = (q.data?.items ?? []) as ItemRow[];
-  const images = (q.data?.images ?? []) as ImageRow[];
+  const items = (data?.items ?? []) as ItemRow[];
+  const images = (data?.images ?? []) as ImageRow[];
   const itemsById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
 
   const grouped = useMemo(() => {
@@ -96,15 +110,8 @@ function ImagesAdmin() {
     missing: missing.length,
   };
 
-  const role = q.data?.role;
+  const role = data?.role;
   const canManage = role === "super_admin";
-
-  const refresh = () => qc.invalidateQueries({ queryKey: ["admin", "images"] });
-
-  const createMut = useMutation({
-    mutationFn: (data: { item_id: string; image_url: string; is_primary?: boolean; display_order?: number }) =>
-      create({ data }),
-  });
 
   const handleUpload = async (file: File, isPrimary: boolean) => {
     if (!uploadFor) return toast.error("Select an item");
@@ -114,11 +121,11 @@ function ImagesAdmin() {
     setWorking(true);
     try {
       const url = await uploadFile(uploadFor, file);
-      await createMut.mutateAsync({ item_id: uploadFor, image_url: url, is_primary: isPrimary, display_order: 0 });
+      await create({ data: { item_id: uploadFor, image_url: url, is_primary: isPrimary, display_order: 0 } });
       toast.success("Image uploaded");
       setUploadOpen(false);
       setUploadFor("");
-      refresh();
+      await loadData();
     } catch (e: any) {
       const msg = e?.message ?? "Upload failed";
       toast.error(msg.includes("Bucket not found") ? "Bucket 'menu-item-images' missing — create it in Supabase Storage." : msg);
@@ -137,7 +144,7 @@ function ImagesAdmin() {
       await replace({ data: { id: replaceFor.id, image_url: url } });
       toast.success("Image replaced");
       setReplaceFor(null);
-      refresh();
+      await loadData();
     } catch (e: any) {
       toast.error(e?.message ?? "Replace failed");
     } finally {
@@ -151,7 +158,7 @@ function ImagesAdmin() {
       await remove({ data: { id: confirmDel.id } });
       toast.success("Image deleted");
       setConfirmDel(null);
-      refresh();
+      await loadData();
     } catch (e: any) {
       toast.error(e?.message ?? "Delete failed");
     }
@@ -161,7 +168,7 @@ function ImagesAdmin() {
     try {
       await setPrimary({ data: { id: img.id, item_id: img.item_id } });
       toast.success("Set as primary");
-      refresh();
+      await loadData();
     } catch (e: any) {
       toast.error(e?.message ?? "Failed");
     }
@@ -198,14 +205,14 @@ function ImagesAdmin() {
           ))}
         </div>
 
-        {q.isLoading && (
+        {isLoading && (
           <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>
         )}
-        {q.isError && (
+        {!!error && (
           <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700">
             <AlertCircle className="mx-auto mb-2 h-5 w-5" />
-            {(q.error as Error).message}
-            <button onClick={() => refresh()} className="mt-2 rounded-full bg-red-600 px-3 py-1 text-[11px] text-white">Retry</button>
+            {error?.message || "Failed to load images"}
+            <button onClick={() => loadData()} className="mt-2 rounded-full bg-red-600 px-3 py-1 text-[11px] text-white">Retry</button>
           </div>
         )}
 
@@ -229,7 +236,7 @@ function ImagesAdmin() {
           </section>
         ) : null}
 
-        {!q.isLoading && grouped.length === 0 && (
+        {!isLoading && grouped.length === 0 && (
           <div className="rounded-2xl border border-gold/30 bg-card p-8 text-center text-maroon-deep/60">
             <Inbox className="mx-auto mb-2 h-8 w-8" />
             <p className="text-sm">No images yet</p>

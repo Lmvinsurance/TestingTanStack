@@ -1,9 +1,8 @@
 // @ts-nocheck
 ;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, X, Utensils, Edit, Grid3x3, Check, Loader2, AlertCircle, Inbox } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -49,12 +48,30 @@ function toneFor(status: string, on: boolean) {
 }
 
 function AvailabilityAdmin() {
-  const qc = useQueryClient();
   const list = useServerFn(listOutletAvailability);
   const upsert = useServerFn(upsertAvailability);
   const bulkFn = useServerFn(bulkAvailability);
 
-  const q = useQuery({ queryKey: ["admin", "availability"], queryFn: () => list(), retry: 1 });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [outletTab, setOutletTab] = useState<string>("ALL");
   const [filter, setFilter] = useState<"All" | "Available" | "Unavailable" | "Limited" | "Sold Out">("All");
@@ -64,24 +81,24 @@ function AvailabilityAdmin() {
   const [bulk, setBulk] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
 
-  const itemsById = useMemo(() => new Map((q.data?.items ?? []).map((i) => [i.id, i])), [q.data]);
-  const outletsById = useMemo(() => new Map((q.data?.outlets ?? []).map((o) => [o.id, o])), [q.data]);
+  const itemsById = useMemo(() => new Map((data?.items ?? []).map((i: any) => [i.id, i])), [data]);
+  const outletsById = useMemo(() => new Map((data?.outlets ?? []).map((o: any) => [o.id, o])), [data]);
   const availMap = useMemo(() => {
     const m = new Map<string, AvailRow>();
-    (q.data?.availability ?? []).forEach((a) => m.set(`${a.outlet_id}:${a.item_id}`, a as AvailRow));
+    (data?.availability ?? []).forEach((a: any) => m.set(`${a.outlet_id}:${a.item_id}`, a as AvailRow));
     return m;
-  }, [q.data]);
+  }, [data]);
 
-  const role = q.data?.role;
+  const role = data?.role;
   const canManage = role === "super_admin" || role === "outlet_admin" || role === "kitchen";
   const isCashier = role === "cashier";
 
   // Build list rows: each (outlet,item) for selected outlet; if ALL → list all availability rows
   const rows = useMemo(() => {
-    const outlets = (q.data?.outlets ?? []).filter((o) =>
+    const outlets = (data?.outlets ?? []).filter((o: any) =>
       outletTab === "ALL" ? true : o.id === outletTab,
     );
-    const items = (q.data?.items ?? []).filter((i) => i.is_active);
+    const items = (data?.items ?? []).filter((i: any) => i.is_active);
     const needle = search.trim().toLowerCase();
     const out: { key: string; outlet_id: string; item_id: string; avail: AvailRow | null }[] = [];
     for (const o of outlets) {
@@ -100,21 +117,23 @@ function AvailabilityAdmin() {
       }
     }
     return out;
-  }, [q.data, outletTab, filter, search, availMap]);
+  }, [data, outletTab, filter, search, availMap]);
 
   const totals = useMemo(() => {
-    const all = (q.data?.availability ?? []) as AvailRow[];
+    const all = (data?.availability ?? []) as AvailRow[];
     return {
       total: all.length,
       available: all.filter((a) => a.is_available && a.stock_status !== "sold_out").length,
       unavailable: all.filter((a) => !a.is_available).length,
-      outlets: (q.data?.outlets ?? []).length,
+      outlets: (data?.outlets ?? []).length,
     };
-  }, [q.data]);
+  }, [data]);
 
-  const saveMut = useMutation({
-    mutationFn: (f: FormState) =>
-      upsert({
+  const [isSaving, setIsSaving] = useState(false);
+  const saveAvailability = async (f: FormState) => {
+    setIsSaving(true);
+    try {
+      await upsert({
         data: {
           outlet_id: f.outlet_id,
           item_id: f.item_id,
@@ -123,26 +142,32 @@ function AvailabilityAdmin() {
           available_from: f.available_from || null,
           available_to: f.available_to || null,
         },
-      }),
-    onSuccess: () => {
+      });
       toast.success("Availability saved");
       setEdit(null);
-      qc.invalidateQueries({ queryKey: ["admin", "availability"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Save failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Save failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-  const bulkMut = useMutation({
-    mutationFn: (p: { outlet_id: string; item_ids: string[]; action: FormState["stock_status"] }) =>
-      bulkFn({ data: p }),
-    onSuccess: (_r, vars) => {
-      toast.success(`Updated ${vars.item_ids.length} item(s)`);
+  const [isBulking, setIsBulking] = useState(false);
+  const bulkAction = async (p: { outlet_id: string; item_ids: string[]; action: FormState["stock_status"] }) => {
+    setIsBulking(true);
+    try {
+      await bulkFn({ data: p });
+      toast.success(`Updated ${p.item_ids.length} item(s)`);
       setBulk(false);
       setSelected([]);
-      qc.invalidateQueries({ queryKey: ["admin", "availability"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Bulk update failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Bulk update failed");
+    } finally {
+      setIsBulking(false);
+    }
+  };
 
   const openEdit = (outlet_id: string, item_id: string, a: AvailRow | null) => {
     setEdit({
@@ -161,7 +186,7 @@ function AvailabilityAdmin() {
     a: AvailRow | null,
     action: FormState["stock_status"],
   ) => {
-    saveMut.mutate({
+    saveAvailability({
       outlet_id,
       item_id,
       is_available: action === "available" || action === "limited",
@@ -171,7 +196,7 @@ function AvailabilityAdmin() {
     });
   };
 
-  const bulkOutlet = outletTab !== "ALL" ? outletTab : (q.data?.outlets?.[0]?.id ?? "");
+  const bulkOutlet = outletTab !== "ALL" ? outletTab : (data?.outlets?.[0]?.id ?? "");
 
   return (
     <AdminPage>
@@ -192,7 +217,7 @@ function AvailabilityAdmin() {
             >
               All
             </button>
-            {(q.data?.outlets ?? []).map((o) => (
+            {(data?.outlets ?? []).map((o: any) => (
               <button
                 key={o.id}
                 onClick={() => setOutletTab(o.id)}
@@ -231,19 +256,19 @@ function AvailabilityAdmin() {
           )}
         </div>
 
-        {q.isLoading && (
+        {isLoading && (
           <div className="space-y-3">
             {[0, 1, 2].map((i) => <div key={i} className="h-24 animate-pulse rounded-3xl bg-card/60" />)}
           </div>
         )}
-        {q.isError && (
+        {!!error && (
           <div className="rounded-3xl border border-red-200 bg-red-50 p-4 text-center text-sm text-red-700">
             <AlertCircle className="mx-auto mb-1 h-5 w-5" />
-            {(q.error as Error)?.message || "Failed to load availability"}
-            <button onClick={() => q.refetch()} className="ml-2 underline">Retry</button>
+            {error?.message || "Failed to load availability"}
+            <button onClick={() => loadData()} className="ml-2 underline">Retry</button>
           </div>
         )}
-        {q.isSuccess && rows.length === 0 && (
+        {(!isLoading && !error) && rows.length === 0 && (
           <div className="rounded-3xl border border-gold/25 bg-card/70 p-8 text-center">
             <Inbox className="mx-auto h-8 w-8 text-maroon-deep/30" />
             <p className="mt-2 text-display text-base text-maroon">No items</p>
@@ -400,11 +425,11 @@ function AvailabilityAdmin() {
                 <div className="flex gap-2 pt-2">
                   <button onClick={() => setEdit(null)} className="flex-1 rounded-xl border border-gold/40 py-3 text-sm font-semibold text-maroon">Cancel</button>
                   <button
-                    disabled={saveMut.isPending}
-                    onClick={() => saveMut.mutate(edit)}
+                    disabled={isSaving}
+                    onClick={() => saveAvailability(edit)}
                     className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60"
                   >
-                    {saveMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save
+                    {isSaving && <Loader2 className="h-4 w-4 animate-spin" />} Save
                   </button>
                 </div>
               </div>
@@ -430,9 +455,9 @@ function AvailabilityAdmin() {
                 ).map(([action, label]) => (
                   <button
                     key={action}
-                    disabled={bulkMut.isPending}
+                    disabled={isBulking}
                     onClick={() =>
-                      bulkMut.mutate({
+                      bulkAction({
                         outlet_id: bulkOutlet,
                         item_ids: selected.map((k) => k.split(":")[1]),
                         action,
@@ -441,7 +466,7 @@ function AvailabilityAdmin() {
                     className="flex w-full items-center justify-between rounded-2xl border border-gold/25 bg-card px-4 py-3 text-left text-sm font-semibold text-maroon disabled:opacity-50"
                   >
                     <span>{label}</span>
-                    {bulkMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {isBulking && <Loader2 className="h-4 w-4 animate-spin" />}
                   </button>
                 ))}
               </div>
@@ -459,21 +484,21 @@ function AvailabilityAdmin() {
                 <div className="min-w-[480px] overflow-hidden rounded-2xl border border-gold/25 bg-card">
                   <div
                     className="grid gap-1 border-b border-gold/20 bg-gold/10 px-3 py-2 text-[10px] font-bold uppercase text-maroon"
-                    style={{ gridTemplateColumns: `1.4fr repeat(${(q.data?.outlets ?? []).length || 1}, 1fr)` }}
+                    style={{ gridTemplateColumns: `1.4fr repeat(${(data?.outlets ?? []).length || 1}, 1fr)` }}
                   >
                     <span>Item</span>
-                    {(q.data?.outlets ?? []).map((o) => (
+                    {(data?.outlets ?? []).map((o: any) => (
                       <span key={o.id} className="text-center truncate">{o.outlet_name.slice(0, 6)}</span>
                     ))}
                   </div>
-                  {(q.data?.items ?? []).filter((i) => i.is_active).slice(0, 50).map((it) => (
+                  {(data?.items ?? []).filter((i: any) => i.is_active).slice(0, 50).map((it: any) => (
                     <div
                       key={it.id}
                       className="grid items-center gap-1 border-b border-gold/15 px-3 py-2.5 text-[11px] text-maroon last:border-0"
-                      style={{ gridTemplateColumns: `1.4fr repeat(${(q.data?.outlets ?? []).length || 1}, 1fr)` }}
+                      style={{ gridTemplateColumns: `1.4fr repeat(${(data?.outlets ?? []).length || 1}, 1fr)` }}
                     >
                       <span className="truncate font-semibold">{it.item_name}</span>
-                      {(q.data?.outlets ?? []).map((o) => {
+                      {(data?.outlets ?? []).map((o: any) => {
                         const a = availMap.get(`${o.id}:${it.id}`);
                         const on = a?.is_available;
                         return (

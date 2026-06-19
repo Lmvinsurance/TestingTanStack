@@ -1,9 +1,8 @@
 // @ts-nocheck
 ;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, X, Edit, ChevronDown, AlertTriangle, Loader2, AlertCircle, Inbox, Plus } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -46,12 +45,30 @@ const emptyForm: FormState = {
 };
 
 function PricingAdmin() {
-  const qc = useQueryClient();
   const list = useServerFn(listOutletPricing);
   const upsert = useServerFn(upsertOutletPrice);
   const toggle = useServerFn(setOutletPriceAvailable);
 
-  const q = useQuery({ queryKey: ["admin", "pricing"], queryFn: () => list(), retry: 1 });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [outletTab, setOutletTab] = useState<string>("ALL");
   const [filter, setFilter] = useState<"All" | "Available" | "Unavailable">("All");
@@ -59,16 +76,16 @@ function PricingAdmin() {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [modal, setModal] = useState<FormState | null>(null);
 
-  const itemsById = useMemo(() => new Map((q.data?.items ?? []).map((i) => [i.id, i])), [q.data]);
-  const variantsById = useMemo(() => new Map((q.data?.variants ?? []).map((v) => [v.id, v])), [q.data]);
-  const outletsById = useMemo(() => new Map((q.data?.outlets ?? []).map((o) => [o.id, o])), [q.data]);
+  const itemsById = useMemo(() => new Map((data?.items ?? []).map((i: any) => [i.id, i])), [data]);
+  const variantsById = useMemo(() => new Map((data?.variants ?? []).map((v: any) => [v.id, v])), [data]);
+  const outletsById = useMemo(() => new Map((data?.outlets ?? []).map((o: any) => [o.id, o])), [data]);
 
-  const role = q.data?.role;
+  const role = data?.role;
   const canManage = role === "super_admin" || role === "outlet_admin";
 
   // Apply outlet/search/filter then group by item
   const grouped = useMemo(() => {
-    const prices = (q.data?.prices ?? []) as PriceRow[];
+    const prices = (data?.prices ?? []) as PriceRow[];
     const needle = search.trim().toLowerCase();
     const filtered = prices.filter((p) => {
       if (outletTab !== "ALL" && p.outlet_id !== outletTab) return false;
@@ -93,13 +110,13 @@ function PricingAdmin() {
       item: itemsById.get(itemId),
       rows,
     }));
-  }, [q.data, outletTab, filter, search, itemsById, variantsById, outletsById]);
+  }, [data, outletTab, filter, search, itemsById, variantsById, outletsById]);
 
   // Missing prices: active variants × outlets that have no price row
   const missing = useMemo(() => {
-    const prices = (q.data?.prices ?? []) as PriceRow[];
-    const variants = (q.data?.variants ?? []).filter((v) => v.is_active);
-    const outlets = (q.data?.outlets ?? []).filter((o) =>
+    const prices = (data?.prices ?? []) as PriceRow[];
+    const variants = (data?.variants ?? []).filter((v: any) => v.is_active);
+    const outlets = (data?.outlets ?? []).filter((o: any) =>
       outletTab === "ALL" ? true : o.id === outletTab,
     );
     const have = new Set(prices.map((p) => `${p.outlet_id}:${p.variant_id}`));
@@ -113,21 +130,23 @@ function PricingAdmin() {
       if (out.length > 20) break;
     }
     return out.slice(0, 20);
-  }, [q.data, outletTab]);
+  }, [data, outletTab]);
 
   const totals = useMemo(() => {
-    const all = (q.data?.prices ?? []) as PriceRow[];
+    const all = (data?.prices ?? []) as PriceRow[];
     return {
       total: all.length,
       available: all.filter((p) => p.is_available).length,
       unavailable: all.filter((p) => !p.is_available).length,
-      outlets: (q.data?.outlets ?? []).length,
+      outlets: (data?.outlets ?? []).length,
     };
-  }, [q.data]);
+  }, [data]);
 
-  const saveMut = useMutation({
-    mutationFn: (f: FormState) =>
-      upsert({
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSave = async (f: FormState) => {
+    setIsSaving(true);
+    try {
+      await upsert({
         data: {
           outlet_id: f.outlet_id,
           item_id: f.item_id,
@@ -136,23 +155,30 @@ function PricingAdmin() {
           mrp_price: f.mrp_price === "" ? null : Number(f.mrp_price),
           is_available: f.is_available,
         },
-      }),
-    onSuccess: () => {
+      });
       toast.success("Price saved");
       setModal(null);
-      qc.invalidateQueries({ queryKey: ["admin", "pricing"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Save failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Save failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-  const toggleMut = useMutation({
-    mutationFn: (p: { id: string; is_available: boolean }) => toggle({ data: p }),
-    onSuccess: () => {
+  const [isToggling, setIsToggling] = useState(false);
+  const handleToggle = async (p: { id: string; is_available: boolean }) => {
+    setIsToggling(true);
+    try {
+      await toggle({ data: p });
       toast.success("Status updated");
-      qc.invalidateQueries({ queryKey: ["admin", "pricing"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Update failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Update failed");
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   const openAdd = (preset?: Partial<FormState>) => {
     setModal({ ...emptyForm, ...(preset || {}) });
@@ -189,7 +215,7 @@ function PricingAdmin() {
             >
               All
             </button>
-            {(q.data?.outlets ?? []).map((o) => (
+            {(data?.outlets ?? []).map((o: any) => (
               <button
                 key={o.id}
                 onClick={() => setOutletTab(o.id)}
@@ -218,21 +244,21 @@ function PricingAdmin() {
           ))}
         </div>
 
-        {q.isLoading && (
+        {isLoading && (
           <div className="space-y-3">
             {[0, 1, 2].map((i) => (
               <div key={i} className="h-32 animate-pulse rounded-3xl bg-card/60" />
             ))}
           </div>
         )}
-        {q.isError && (
+        {!!error && (
           <div className="rounded-3xl border border-red-200 bg-red-50 p-4 text-center text-sm text-red-700">
             <AlertCircle className="mx-auto mb-1 h-5 w-5" />
-            {(q.error as Error)?.message || "Failed to load pricing"}
-            <button onClick={() => q.refetch()} className="ml-2 underline">Retry</button>
+            {(error as Error)?.message || "Failed to load pricing"}
+            <button onClick={() => loadData()} className="ml-2 underline">Retry</button>
           </div>
         )}
-        {q.isSuccess && grouped.length === 0 && missing.length === 0 && (
+        {!isLoading && !error && grouped.length === 0 && missing.length === 0 && (
           <div className="rounded-3xl border border-gold/25 bg-card/70 p-8 text-center">
             <Inbox className="mx-auto h-8 w-8 text-maroon-deep/30" />
             <p className="mt-2 text-display text-base text-maroon">No pricing records</p>
@@ -292,8 +318,9 @@ function PricingAdmin() {
                           </div>
                           {canManage && (
                             <button
-                              onClick={() => toggleMut.mutate({ id: p.id, is_available: !p.is_available })}
-                              className="mt-2 text-[10px] font-semibold text-saffron-deep"
+                              disabled={isToggling}
+                              onClick={() => handleToggle({ id: p.id, is_available: !p.is_available })}
+                              className="mt-2 text-[10px] font-semibold text-saffron-deep disabled:opacity-50"
                             >
                               {p.is_available ? "Deactivate" : "Activate"}
                             </button>
@@ -366,7 +393,7 @@ function PricingAdmin() {
                 <Field label="Outlet *">
                   <select value={modal.outlet_id} onChange={(e) => setModal({ ...modal, outlet_id: e.target.value })} className="w-full rounded-xl border border-gold/30 bg-card px-3 py-2.5 text-xs">
                     <option value="">Select outlet…</option>
-                    {(q.data?.outlets ?? []).map((o) => (
+                    {(data?.outlets ?? []).map((o: any) => (
                       <option key={o.id} value={o.id}>{o.outlet_name}</option>
                     ))}
                   </select>
@@ -378,7 +405,7 @@ function PricingAdmin() {
                     className="w-full rounded-xl border border-gold/30 bg-card px-3 py-2.5 text-xs"
                   >
                     <option value="">Select item…</option>
-                    {(q.data?.items ?? []).filter((i) => i.is_active).map((i) => (
+                    {(data?.items ?? []).filter((i: any) => i.is_active).map((i: any) => (
                       <option key={i.id} value={i.id}>{i.item_name}</option>
                     ))}
                   </select>
@@ -398,9 +425,9 @@ function PricingAdmin() {
                     disabled={!modal.item_id}
                   >
                     <option value="">Select variant…</option>
-                    {(q.data?.variants ?? [])
-                      .filter((v) => v.item_id === modal.item_id && v.is_active)
-                      .map((v) => (
+                    {(data?.variants ?? [])
+                      .filter((v: any) => v.item_id === modal.item_id && v.is_active)
+                      .map((v: any) => (
                         <option key={v.id} value={v.id}>{v.variant_name}{v.quantity_label ? ` (${v.quantity_label})` : ""}</option>
                       ))}
                   </select>
@@ -419,8 +446,8 @@ function PricingAdmin() {
                 </label>
                 <div className="flex gap-2 pt-2">
                   <button onClick={() => setModal(null)} className="flex-1 rounded-xl border border-gold/40 py-3 text-sm font-semibold text-maroon">Cancel</button>
-                  <button disabled={saveMut.isPending} onClick={() => saveMut.mutate(modal)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60">
-                    {saveMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save
+                  <button disabled={isSaving} onClick={() => handleSave(modal)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60">
+                    {isSaving && <Loader2 className="h-4 w-4 animate-spin" />} Save
                   </button>
                 </div>
               </div>

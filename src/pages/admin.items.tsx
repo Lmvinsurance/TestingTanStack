@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";;
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Plus, X, Utensils, Edit, Eye, Layers, Image as ImageIcon, Star, Award, Loader2, Power } from "lucide-react";
 import { AdminHeader, AdminPage, StatCard, Chip } from "@/components/admin/AdminShell";
@@ -28,72 +27,74 @@ type Item = {
 type Lookup = { id: string; name: string };
 
 function ItemsAdmin() {
-  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<Item | null>(null);
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive" | "Bestseller" | "Recommended" | "New">("All");
   const [catFilter, setCatFilter] = useState("");
   const [q, setQ] = useState("");
 
-  const { data: items = [], isLoading, error } = useQuery<Item[]>({
-    queryKey: ["admin", "items"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("menu_items")
-        .select("id, item_name, short_description, full_description, category_id, subcategory_id, cuisine_id, dietary_type_id, spice_level, is_bestseller, is_recommended, is_new, is_active")
-        .eq("is_deleted", false)
-        .order("item_name");
-      if (error) throw error;
-      return (data ?? []) as Item[];
-    },
-  });
+  const [items, setItems] = useState<Item[]>([]);
+  const [cats, setCats] = useState<Lookup[]>([]);
+  const [subs, setSubs] = useState<(Lookup & { category_id: string })[]>([]);
+  const [cuisines, setCuisines] = useState<Lookup[]>([]);
+  const [diets, setDiets] = useState<Lookup[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
-  const { data: cats = [] } = useQuery<Lookup[]>({
-    queryKey: ["lookup", "categories"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("menu_categories").select("id, category_name").eq("is_deleted", false).order("category_name");
-      if (error) throw error;
-      return (data ?? []).map((r: any) => ({ id: r.id, name: r.category_name }));
-    },
-  });
-  const { data: subs = [] } = useQuery<(Lookup & { category_id: string })[]>({
-    queryKey: ["lookup", "subcategories"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("menu_subcategories").select("id, category_id, subcategory_name").eq("is_deleted", false).order("subcategory_name");
-      if (error) throw error;
-      return (data ?? []).map((r: any) => ({ id: r.id, name: r.subcategory_name, category_id: r.category_id }));
-    },
-  });
-  const { data: cuisines = [] } = useQuery<Lookup[]>({
-    queryKey: ["lookup", "cuisines"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("cuisine_types").select("id, cuisine_name").order("cuisine_name");
-      if (error) throw error;
-      return (data ?? []).map((r: any) => ({ id: r.id, name: r.cuisine_name }));
-    },
-  });
-  const { data: diets = [] } = useQuery<Lookup[]>({
-    queryKey: ["lookup", "dietary"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("dietary_types").select("id, dietary_name").order("dietary_name");
-      if (error) throw error;
-      return (data ?? []).map((r: any) => ({ id: r.id, name: r.dietary_name }));
-    },
-  });
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const [itemsRes, catsRes, subsRes, cuisinesRes, dietsRes] = await Promise.all([
+        supabase.from("menu_items").select("id, item_name, short_description, full_description, category_id, subcategory_id, cuisine_id, dietary_type_id, spice_level, is_bestseller, is_recommended, is_new, is_active").eq("is_deleted", false).order("item_name"),
+        supabase.from("menu_categories").select("id, category_name").eq("is_deleted", false).order("category_name"),
+        supabase.from("menu_subcategories").select("id, category_id, subcategory_name").eq("is_deleted", false).order("subcategory_name"),
+        supabase.from("cuisine_types").select("id, cuisine_name").order("cuisine_name"),
+        supabase.from("dietary_types").select("id, dietary_name").order("dietary_name")
+      ]);
+
+      if (itemsRes.error) throw itemsRes.error;
+      if (catsRes.error) throw catsRes.error;
+      if (subsRes.error) throw subsRes.error;
+      if (cuisinesRes.error) throw cuisinesRes.error;
+      if (dietsRes.error) throw dietsRes.error;
+
+      setItems(itemsRes.data as Item[]);
+      setCats(catsRes.data.map((r: any) => ({ id: r.id, name: r.category_name })));
+      setSubs(subsRes.data.map((r: any) => ({ id: r.id, name: r.subcategory_name, category_id: r.category_id })));
+      setCuisines(cuisinesRes.data.map((r: any) => ({ id: r.id, name: r.cuisine_name })));
+      setDiets(dietsRes.data.map((r: any) => ({ id: r.id, name: r.dietary_name })));
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const lookupName = (arr: Lookup[], id: string | null) => arr.find((r) => r.id === id)?.name ?? "—";
 
-  const toggleMut = useMutation({
-    mutationFn: async (it: Item) => {
+  const [isToggling, setIsToggling] = useState(false);
+  const handleToggle = async (it: Item) => {
+    setIsToggling(true);
+    try {
       const { error } = await supabase.from("menu_items").update({ is_active: !it.is_active }).eq("id", it.id);
       if (error) throw error;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "items"] }),
-    onError: (e: any) => toast.error(e?.message ?? "Update failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Update failed");
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
-  const saveMut = useMutation({
-    mutationFn: async (payload: Partial<Item> & { item_name: string }) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSave = async (payload: Partial<Item> & { item_name: string }) => {
+    setIsSaving(true);
+    try {
       if (!payload.category_id) throw new Error("Category is required");
       const slug = payload.item_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
       const { error } = await supabase.from("menu_items").insert({
@@ -111,14 +112,15 @@ function ItemsAdmin() {
         is_active: true,
       });
       if (error) throw error;
-    },
-    onSuccess: () => {
       toast.success("Item added");
-      qc.invalidateQueries({ queryKey: ["admin", "items"] });
+      await loadData();
       setOpen(false);
-    },
-    onError: (e: any) => toast.error(e?.message ?? "Save failed"),
-  });
+    } catch (e: any) {
+      toast.error(e?.message ?? "Save failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const filtered = items.filter((it) => {
     if (filter === "Active" && !it.is_active) return false;
@@ -182,7 +184,7 @@ function ItemsAdmin() {
               </div>
               <div className="grid grid-cols-4 gap-1 border-t border-gold/20 bg-cream/50 p-2 text-[10px] font-semibold">
                 <button onClick={() => setView(it)} className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-maroon"><Eye className="h-3 w-3" />View</button>
-                <button onClick={() => toggleMut.mutate(it)} disabled={toggleMut.isPending} className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep"><Power className="h-3 w-3" />{it.is_active ? "Off" : "On"}</button>
+                <button onClick={() => handleToggle(it)} disabled={isToggling} className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep"><Power className="h-3 w-3" />{it.is_active ? "Off" : "On"}</button>
                 <Link to="/admin/pricing" className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep"><Layers className="h-3 w-3" />Price</Link>
                 <Link to="/admin/images" className="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-saffron-deep"><ImageIcon className="h-3 w-3" />Images</Link>
               </div>
@@ -201,8 +203,8 @@ function ItemsAdmin() {
           <ItemFormSheet
             cats={cats} subs={subs} cuisines={cuisines} diets={diets}
             onClose={() => setOpen(false)}
-            onSave={(p) => saveMut.mutate(p)}
-            saving={saveMut.isPending}
+            onSave={(p) => handleSave(p)}
+            saving={isSaving}
           />
         )}
       </AnimatePresence>

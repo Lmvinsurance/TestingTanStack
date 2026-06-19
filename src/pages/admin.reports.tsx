@@ -1,8 +1,7 @@
 import { Link } from "react-router-dom";;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { motion } from "motion/react";
 import { Bell, ChevronLeft, Calendar, TrendingUp, Sparkles, Loader2, AlertCircle } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -21,13 +20,29 @@ function fmt(n: number) { return "₹" + Math.round(Number(n || 0)).toLocaleStri
 function ReportsAdmin() {
   const [range, setRange] = useState<RangeKey>("month");
   const get = useServerFn(getAdminReports);
-  const q = useQuery({
-    queryKey: ["admin", "reports", range],
-    queryFn: () => get({ data: { range } }),
-    retry: 1,
-  });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
-  const d = q.data;
+  useEffect(() => {
+    let active = true;
+    const fetchReports = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await get({ data: { range } });
+        if (active) setData(res);
+      } catch (err: any) {
+        if (active) setError(err);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    };
+    fetchReports();
+    return () => { active = false; };
+  }, [range, get]);
+
+  const d = data;
 
   const metrics = useMemo(() => {
     if (!d) return null;
@@ -121,8 +136,8 @@ function ReportsAdmin() {
           </div>
         </div>
 
-        {q.isLoading && <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>}
-        {q.isError && <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700"><AlertCircle className="mx-auto mb-2 h-5 w-5" />{(q.error as Error).message}</div>}
+        {isLoading && <div className="grid place-items-center py-10 text-maroon"><Loader2 className="h-6 w-6 animate-spin" /></div>}
+        {!!error && <div className="rounded-2xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700"><AlertCircle className="mx-auto mb-2 h-5 w-5" />{(error as Error).message}</div>}
 
         {metrics && (
           <>

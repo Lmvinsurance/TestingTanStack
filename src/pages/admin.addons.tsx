@@ -1,9 +1,8 @@
 // @ts-nocheck
 ;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Plus, X, Edit, Eye, Users, Power, Loader2, AlertCircle, Inbox } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -39,14 +38,32 @@ type FormState = {
 const emptyForm = (): FormState => ({ addon_name: "", description: "", price: "", is_active: true });
 
 function AddonsAdmin() {
-  const qc = useQueryClient();
   const list = useServerFn(listAdminAddons);
   const create = useServerFn(createAdminAddon);
   const update = useServerFn(updateAdminAddon);
   const toggle = useServerFn(setAdminAddonActive);
   const assign = useServerFn(saveAddonAssignments);
 
-  const q = useQuery({ queryKey: ["admin", "addons"], queryFn: () => list(), retry: 1 });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
@@ -57,28 +74,28 @@ function AddonsAdmin() {
   const [usageFor, setUsageFor] = useState<Addon | null>(null);
   const [assignSel, setAssignSel] = useState<Record<string, { is_required: boolean; max_quantity: number }>>({});
 
-  const role = q.data?.role;
+  const role = data?.role;
   const canManage = role === "super_admin";
   const noAccess = role && !canManage && role !== "outlet_admin";
 
   const itemsById = useMemo(() => {
     const m = new Map<string, Item>();
-    (q.data?.items ?? []).forEach((i) => m.set(i.id, i as Item));
+    (data?.items ?? []).forEach((i: any) => m.set(i.id, i as Item));
     return m;
-  }, [q.data]);
+  }, [data]);
 
   const usageByAddon = useMemo(() => {
     const m = new Map<string, Mapping[]>();
-    (q.data?.mappings ?? []).forEach((map) => {
+    (data?.mappings ?? []).forEach((map: any) => {
       const arr = m.get(map.addon_id) ?? [];
       arr.push(map as Mapping);
       m.set(map.addon_id, arr);
     });
     return m;
-  }, [q.data]);
+  }, [data]);
 
   const visible = useMemo(() => {
-    const all = (q.data?.addons ?? []) as Addon[];
+    const all = (data?.addons ?? []) as Addon[];
     const needle = search.trim().toLowerCase();
     return all.filter((a) => {
       if (filter === "Active" && !a.is_active) return false;
@@ -86,50 +103,60 @@ function AddonsAdmin() {
       if (!needle) return true;
       return [a.addon_name, a.description].filter(Boolean).some((s) => s!.toLowerCase().includes(needle));
     });
-  }, [q.data, search, filter]);
+  }, [data, search, filter]);
 
   const totals = useMemo(() => {
-    const all = (q.data?.addons ?? []) as Addon[];
+    const all = (data?.addons ?? []) as Addon[];
     return {
       total: all.length,
       active: all.filter((a) => a.is_active).length,
       inactive: all.filter((a) => !a.is_active).length,
-      assigned: new Set((q.data?.mappings ?? []).map((m) => m.addon_id)).size,
+      assigned: new Set((data?.mappings ?? []).map((m: any) => m.addon_id)).size,
     };
-  }, [q.data]);
+  }, [data]);
 
-  const saveMut = useMutation({
-    mutationFn: async (f: FormState) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const saveAddon = async (f: FormState) => {
+    setIsSaving(true);
+    try {
       const payload = {
         addon_name: f.addon_name,
         description: f.description || null,
         price: Number(f.price),
         is_active: f.is_active,
       };
-      if (f.id) return update({ data: { id: f.id, ...payload } });
-      return create({ data: payload });
-    },
-    onSuccess: () => {
+      if (f.id) await update({ data: { id: f.id, ...payload } });
+      else await create({ data: payload });
       toast.success(form.id ? "Add-on updated" : "Add-on created");
       setOpen(false);
-      qc.invalidateQueries({ queryKey: ["admin", "addons"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Save failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Save failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-  const toggleMut = useMutation({
-    mutationFn: (p: { id: string; is_active: boolean }) => toggle({ data: p }),
-    onSuccess: () => {
+  const [isToggling, setIsToggling] = useState(false);
+  const toggleAddon = async (p: { id: string; is_active: boolean }) => {
+    setIsToggling(true);
+    try {
+      await toggle({ data: p });
       toast.success("Status updated");
       setConfirm(null);
-      qc.invalidateQueries({ queryKey: ["admin", "addons"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Update failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Update failed");
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
-  const assignMut = useMutation({
-    mutationFn: () =>
-      assign({
+  const [isAssigning, setIsAssigning] = useState(false);
+  const saveAssign = async () => {
+    setIsAssigning(true);
+    try {
+      const r = await assign({
         data: {
           addon_id: assignFor!.id,
           items: Object.entries(assignSel).map(([item_id, v]) => ({
@@ -138,14 +165,16 @@ function AddonsAdmin() {
             max_quantity: v.max_quantity,
           })),
         },
-      }),
-    onSuccess: (r) => {
+      });
       toast.success(`Saved: +${r.added} −${r.removed} ~${r.updated}`);
       setAssignFor(null);
-      qc.invalidateQueries({ queryKey: ["admin", "addons"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Save failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Save failed");
+    } finally {
+      setIsAssigning(false);
+    }
+  };
 
   const openAdd = () => {
     setForm(emptyForm());
@@ -211,23 +240,23 @@ function AddonsAdmin() {
           ))}
         </div>
 
-        {q.isLoading && (
+        {isLoading && (
           <div className="space-y-3">
             {[0, 1, 2].map((i) => (
               <div key={i} className="h-24 animate-pulse rounded-3xl bg-card/60" />
             ))}
           </div>
         )}
-        {q.isError && (
+        {!!error && (
           <div className="rounded-3xl border border-red-200 bg-red-50 p-4 text-center text-sm text-red-700">
             <AlertCircle className="mx-auto mb-1 h-5 w-5" />
-            {(q.error as Error)?.message || "Failed to load"}
-            <button onClick={() => q.refetch()} className="ml-2 underline">
+            {error?.message || "Failed to load"}
+            <button onClick={() => loadData()} className="ml-2 underline">
               Retry
             </button>
           </div>
         )}
-        {q.isSuccess && visible.length === 0 && (
+        {(!isLoading && !error) && visible.length === 0 && (
           <div className="rounded-3xl border border-gold/25 bg-card/70 p-8 text-center">
             <Inbox className="mx-auto h-8 w-8 text-maroon-deep/30" />
             <p className="mt-2 text-display text-base text-maroon">No add-ons found</p>
@@ -322,8 +351,8 @@ function AddonsAdmin() {
                 </label>
                 <div className="flex gap-2 pt-2">
                   <button onClick={() => setOpen(false)} className="flex-1 rounded-xl border border-gold/40 py-3 text-sm font-semibold text-maroon">Cancel</button>
-                  <button disabled={saveMut.isPending} onClick={() => saveMut.mutate(form)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60">
-                    {saveMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save
+                  <button disabled={isSaving} onClick={() => saveAddon(form)} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60">
+                    {isSaving && <Loader2 className="h-4 w-4 animate-spin" />} Save
                   </button>
                 </div>
               </div>
@@ -342,8 +371,8 @@ function AddonsAdmin() {
               <p className="mt-1 text-xs text-maroon-deep/70">{confirm.addon_name}</p>
               <div className="mt-4 flex gap-2">
                 <button onClick={() => setConfirm(null)} className="flex-1 rounded-xl border border-gold/40 py-2.5 text-sm font-semibold text-maroon">Cancel</button>
-                <button disabled={toggleMut.isPending} onClick={() => toggleMut.mutate({ id: confirm.id, is_active: !confirm.is_active })} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-2.5 text-sm font-semibold text-cream disabled:opacity-60">
-                  {toggleMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Confirm
+                <button disabled={isToggling} onClick={() => toggleAddon({ id: confirm.id, is_active: !confirm.is_active })} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-2.5 text-sm font-semibold text-cream disabled:opacity-60">
+                  {isToggling && <Loader2 className="h-4 w-4 animate-spin" />} Confirm
                 </button>
               </div>
             </motion.div>
@@ -364,7 +393,7 @@ function AddonsAdmin() {
               </div>
               <p className="mt-1 text-xs text-maroon-deep/70">{assignFor.addon_name}</p>
               <div className="mt-3 space-y-2">
-                {(q.data?.items ?? []).filter((i) => i.is_active).map((i) => {
+                {(data?.items ?? []).filter((i: any) => i.is_active).map((i: any) => {
                   const sel = assignSel[i.id];
                   const checked = !!sel;
                   return (
@@ -412,8 +441,8 @@ function AddonsAdmin() {
               </div>
               <div className="sticky bottom-0 mt-4 flex gap-2 bg-cream pt-2">
                 <button onClick={() => setAssignFor(null)} className="flex-1 rounded-xl border border-gold/40 py-3 text-sm font-semibold text-maroon">Cancel</button>
-                <button disabled={assignMut.isPending} onClick={() => assignMut.mutate()} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60">
-                  {assignMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save Assignments
+                <button disabled={isAssigning} onClick={() => saveAssign()} className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60">
+                  {isAssigning && <Loader2 className="h-4 w-4 animate-spin" />} Save Assignments
                 </button>
               </div>
             </motion.div>

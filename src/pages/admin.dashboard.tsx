@@ -1,6 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";;
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState, useEffect } from "react";
 import {
   Bell, ShoppingBag, Utensils, TrendingUp, AlertTriangle, Store,
   FileText, BarChart3, CreditCard, Tag, Eye, LogOut, Loader2, Upload,
@@ -49,75 +48,74 @@ function AdminDashboard() {
   const navigate = useNavigate();
   const [outletId, setOutletId] = useState<string>("");
 
-  const { data: outlets = [] } = useQuery<Outlet[]>({
-    queryKey: ["admin", "outlets", "compact"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("outlets")
-        .select("id, outlet_name")
-        .eq("is_active", true)
-        .order("outlet_name");
-      if (error) throw error;
-      return (data ?? []) as Outlet[];
-    },
-  });
+  const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [todayOrders, setTodayOrders] = useState<OrderRow[]>([]);
+  const [recent, setRecent] = useState<OrderRow[]>([]);
+  const [customerCount, setCustomerCount] = useState<number | null>(null);
+  const [itemCount, setItemCount] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const { data: todayOrders = [], isLoading } = useQuery<OrderRow[]>({
-    queryKey: ["admin", "dashboard", "today", outletId],
-    queryFn: async () => {
-      let qry = supabase
-        .from("orders")
-        .select("id, order_number, outlet_id, order_status, payment_status, grand_total, created_at, customers(full_name)")
-        .gte("created_at", startOfDayISO())
-        .order("created_at", { ascending: false });
-      if (outletId) qry = qry.eq("outlet_id", outletId);
-      const { data, error } = await qry;
-      if (error) throw error;
-      return (data ?? []) as unknown as OrderRow[];
-    },
-    refetchInterval: 30000,
-  });
+  useEffect(() => {
+    let active = true;
+    async function loadMeta() {
+      try {
+        const [outletsRes, custRes, itemRes] = await Promise.all([
+          supabase.from("outlets").select("id, outlet_name").eq("is_active", true).order("outlet_name"),
+          supabase.from("customers").select("id", { count: "exact", head: true }).eq("is_deleted", false),
+          supabase.from("menu_items").select("id", { count: "exact", head: true }).eq("is_deleted", false).eq("is_active", true)
+        ]);
 
-  const { data: recent = [] } = useQuery<OrderRow[]>({
-    queryKey: ["admin", "dashboard", "recent", outletId],
-    queryFn: async () => {
-      let qry = supabase
-        .from("orders")
-        .select("id, order_number, outlet_id, order_status, payment_status, grand_total, created_at, customers(full_name)")
-        .order("created_at", { ascending: false })
-        .limit(8);
-      if (outletId) qry = qry.eq("outlet_id", outletId);
-      const { data, error } = await qry;
-      if (error) throw error;
-      return (data ?? []) as unknown as OrderRow[];
-    },
-    refetchInterval: 30000,
-  });
+        if (active) {
+          if (!outletsRes.error) setOutlets(outletsRes.data as Outlet[]);
+          if (!custRes.error) setCustomerCount(custRes.count);
+          if (!itemRes.error) setItemCount(itemRes.count);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    loadMeta();
+    return () => { active = false; };
+  }, []);
 
-  const { data: customerCount } = useQuery<number>({
-    queryKey: ["admin", "dashboard", "customers"],
-    queryFn: async () => {
-      const { count, error } = await supabase
-        .from("customers")
-        .select("id", { count: "exact", head: true })
-        .eq("is_deleted", false);
-      if (error) throw error;
-      return count ?? 0;
-    },
-  });
+  useEffect(() => {
+    let active = true;
+    async function fetchOrders() {
+      setIsLoading(true);
+      try {
+        let todayQry = supabase
+          .from("orders")
+          .select("id, order_number, outlet_id, order_status, payment_status, grand_total, created_at, customers(full_name)")
+          .gte("created_at", startOfDayISO())
+          .order("created_at", { ascending: false });
+        if (outletId) todayQry = todayQry.eq("outlet_id", outletId);
 
-  const { data: itemCount } = useQuery<number>({
-    queryKey: ["admin", "dashboard", "items"],
-    queryFn: async () => {
-      const { count, error } = await supabase
-        .from("menu_items")
-        .select("id", { count: "exact", head: true })
-        .eq("is_deleted", false)
-        .eq("is_active", true);
-      if (error) throw error;
-      return count ?? 0;
-    },
-  });
+        let recentQry = supabase
+          .from("orders")
+          .select("id, order_number, outlet_id, order_status, payment_status, grand_total, created_at, customers(full_name)")
+          .order("created_at", { ascending: false })
+          .limit(8);
+        if (outletId) recentQry = recentQry.eq("outlet_id", outletId);
+
+        const [todayRes, recentRes] = await Promise.all([todayQry, recentQry]);
+        if (active) {
+          if (!todayRes.error) setTodayOrders(todayRes.data as unknown as OrderRow[]);
+          if (!recentRes.error) setRecent(recentRes.data as unknown as OrderRow[]);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (active) setIsLoading(false);
+      }
+    }
+
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 30000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [outletId]);
 
   const stats = useMemo(() => {
     const buckets = bucketOrderCounts(todayOrders);

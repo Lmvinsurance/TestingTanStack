@@ -1,8 +1,7 @@
 import { Link } from "react-router-dom";;
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, Plus, X, Edit, Copy, Power, TrendingUp, Loader2, AlertCircle, Inbox } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@/lib/react-start-mock";
 import { toast } from "sonner";
 import { AdminGuard } from "@/components/admin/AdminGuard";
@@ -49,17 +48,31 @@ const emptyForm = (item_id = ""): FormState => ({
 });
 
 function VariantsAdmin() {
-  const qc = useQueryClient();
   const list = useServerFn(listAdminVariants);
   const create = useServerFn(createAdminVariant);
   const update = useServerFn(updateAdminVariant);
   const toggle = useServerFn(setAdminVariantActive);
 
-  const q = useQuery({
-    queryKey: ["admin", "variants"],
-    queryFn: () => list(),
-    retry: 1,
-  });
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
+
+  const loadData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await list();
+      setData(res);
+    } catch (err: any) {
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [list]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"All" | "Active" | "Inactive">("All");
@@ -69,12 +82,12 @@ function VariantsAdmin() {
 
   const itemsById = useMemo(() => {
     const m = new Map<string, ItemRow>();
-    (q.data?.items ?? []).forEach((i) => m.set(i.id, i as ItemRow));
+    (data?.items ?? []).forEach((i: any) => m.set(i.id, i as ItemRow));
     return m;
-  }, [q.data]);
+  }, [data]);
 
   const grouped = useMemo(() => {
-    const variants = (q.data?.variants ?? []) as VariantRow[];
+    const variants = (data?.variants ?? []) as VariantRow[];
     const needle = search.trim().toLowerCase();
     const filtered = variants.filter((v) => {
       if (filter === "Active" && !v.is_active) return false;
@@ -96,24 +109,26 @@ function VariantsAdmin() {
       item: itemsById.get(itemId),
       variants: vs,
     }));
-  }, [q.data, search, filter, itemsById]);
+  }, [data, search, filter, itemsById]);
 
   const totals = useMemo(() => {
-    const all = (q.data?.variants ?? []) as VariantRow[];
+    const all = (data?.variants ?? []) as VariantRow[];
     return {
       total: all.length,
       active: all.filter((v) => v.is_active).length,
       inactive: all.filter((v) => !v.is_active).length,
       items: new Set(all.map((v) => v.item_id)).size,
     };
-  }, [q.data]);
+  }, [data]);
 
-  const role = q.data?.role;
+  const role = data?.role;
   const canManage = role === "super_admin";
   const noAccess = role && role !== "super_admin" && role !== "outlet_admin";
 
-  const saveMut = useMutation({
-    mutationFn: async (f: FormState) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSave = async (f: FormState) => {
+    setIsSaving(true);
+    try {
       const payload = {
         item_id: f.item_id,
         variant_name: f.variant_name,
@@ -122,26 +137,35 @@ function VariantsAdmin() {
         base_price: Number(f.base_price),
         is_active: f.is_active,
       };
-      if (f.id) return update({ data: { id: f.id, ...payload } });
-      return create({ data: payload });
-    },
-    onSuccess: () => {
-      toast.success(form.id ? "Variant updated" : "Variant added");
+      if (f.id) {
+        await update({ data: { id: f.id, ...payload } });
+      } else {
+        await create({ data: payload });
+      }
+      toast.success(f.id ? "Variant updated" : "Variant added");
       setOpen(false);
-      qc.invalidateQueries({ queryKey: ["admin", "variants"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Save failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Save failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
-  const toggleMut = useMutation({
-    mutationFn: (p: { id: string; is_active: boolean }) => toggle({ data: p }),
-    onSuccess: () => {
+  const [isToggling, setIsToggling] = useState(false);
+  const handleToggle = async (p: { id: string; is_active: boolean }) => {
+    setIsToggling(true);
+    try {
+      await toggle({ data: p });
       toast.success("Status updated");
       setConfirm(null);
-      qc.invalidateQueries({ queryKey: ["admin", "variants"] });
-    },
-    onError: (e: Error) => toast.error(e.message || "Update failed"),
-  });
+      await loadData();
+    } catch (e: any) {
+      toast.error(e.message || "Update failed");
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   const openAdd = (item_id = "") => {
     setForm(emptyForm(item_id));
@@ -213,7 +237,7 @@ function VariantsAdmin() {
           ))}
         </div>
 
-        {q.isLoading && (
+        {isLoading && (
           <div className="space-y-3">
             {[0, 1, 2].map((i) => (
               <div key={i} className="h-32 animate-pulse rounded-3xl bg-card/60" />
@@ -221,17 +245,17 @@ function VariantsAdmin() {
           </div>
         )}
 
-        {q.isError && (
+        {!!error && (
           <div className="rounded-3xl border border-red-200 bg-red-50 p-4 text-center text-sm text-red-700">
             <AlertCircle className="mx-auto mb-1 h-5 w-5" />
-            {(q.error as Error)?.message || "Failed to load variants"}
-            <button onClick={() => q.refetch()} className="ml-2 underline">
+            {(error as Error)?.message || "Failed to load variants"}
+            <button onClick={() => loadData()} className="ml-2 underline">
               Retry
             </button>
           </div>
         )}
 
-        {q.isSuccess && grouped.length === 0 && (
+        {!isLoading && !error && grouped.length === 0 && (
           <div className="rounded-3xl border border-gold/25 bg-card/70 p-8 text-center">
             <Inbox className="mx-auto h-8 w-8 text-maroon-deep/30" />
             <p className="mt-2 text-display text-base text-maroon">No variants found</p>
@@ -359,9 +383,9 @@ function VariantsAdmin() {
                     className="w-full rounded-xl border border-gold/30 bg-card px-3 py-2.5 text-xs"
                   >
                     <option value="">Select item…</option>
-                    {(q.data?.items ?? [])
-                      .filter((i) => i.is_active)
-                      .map((i) => (
+                    {(data?.items ?? [])
+                      .filter((i: any) => i.is_active)
+                      .map((i: any) => (
                         <option key={i.id} value={i.id}>
                           {i.item_name}
                         </option>
@@ -419,11 +443,11 @@ function VariantsAdmin() {
                     Cancel
                   </button>
                   <button
-                    disabled={saveMut.isPending}
-                    onClick={() => saveMut.mutate(form)}
+                    disabled={isSaving}
+                    onClick={() => handleSave(form)}
                     className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-3 text-sm font-semibold text-cream shadow disabled:opacity-60"
                   >
-                    {saveMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Save
+                    {isSaving && <Loader2 className="h-4 w-4 animate-spin" />} Save
                   </button>
                 </div>
               </div>
@@ -463,11 +487,11 @@ function VariantsAdmin() {
                   Cancel
                 </button>
                 <button
-                  disabled={toggleMut.isPending}
-                  onClick={() => toggleMut.mutate({ id: confirm.v.id, is_active: !confirm.v.is_active })}
+                  disabled={isToggling}
+                  onClick={() => handleToggle({ id: confirm.v.id, is_active: !confirm.v.is_active })}
                   className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep py-2.5 text-sm font-semibold text-cream disabled:opacity-60"
                 >
-                  {toggleMut.isPending && <Loader2 className="h-4 w-4 animate-spin" />} Confirm
+                  {isToggling && <Loader2 className="h-4 w-4 animate-spin" />} Confirm
                 </button>
               </div>
             </motion.div>
