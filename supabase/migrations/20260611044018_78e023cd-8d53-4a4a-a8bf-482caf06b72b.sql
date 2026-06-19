@@ -1,0 +1,1 @@
+CREATE POLICY "customers_insert_own" ON public.customers FOR INSERT TO authenticated WITH CHECK (supabase_user_id = auth.uid());

@@ -1,0 +1,314 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-saffron: var(--saffron);
+  --color-saffron-deep: var(--saffron-deep);
+  --color-maroon: var(--maroon);
+  --color-maroon-deep: var(--maroon-deep);
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+  --color-cream: var(--cream);
+  --color-cream-warm: var(--cream-warm);
+
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-serif: "Space Grotesk", serif;
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --font-script: "Space Grotesk", cursive;
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* Emerald Prestige — premium palette.
+     Mapped onto the existing semantic names so every admin page upgrades
+     automatically without touching individual files.
+
+     maroon       -> Deep Emerald   #064e3b  (primary brand, headings, nav)
+     maroon-deep  -> Forest Emerald #03291f  (body text, deep surfaces)
+     saffron      -> Champagne Gold #c9a84c  (primary accent / CTA)
+     saffron-deep -> Antique Gold   #8d7426  (deep accent / hover)
+     gold         -> Champagne Gold #c9a84c  (highlights, badges)
+     gold-soft    -> Pale Gold      #e8d896  (borders, soft tints)
+     cream        -> Ivory          #f5f0e0  (warm neutral surface)
+     persimmon    -> Burnished Gold #b8893a  (alerts / secondary accent)
+  */
+  --cream: #f5f0e0;
+  --cream-warm: #ece4cb;
+
+  --saffron: #c9a84c;
+  --saffron-deep: #8d7426;
+  --maroon: #064e3b;
+  --maroon-deep: #03291f;
+  --gold: #c9a84c;
+  --gold-soft: #e8d896;
+  --persimmon: #b8893a;
+
+  --background: var(--cream);
+  --foreground: var(--maroon-deep);
+  --card: #ffffff;
+  --card-foreground: var(--maroon-deep);
+  --popover: #ffffff;
+  --popover-foreground: var(--maroon-deep);
+  --primary: var(--maroon);
+  --primary-foreground: var(--cream);
+  --secondary: var(--gold-soft);
+  --secondary-foreground: var(--maroon-deep);
+  --muted: oklch(0.95 0.012 150);
+  --muted-foreground: oklch(0.42 0.04 160);
+  --accent: var(--gold);
+  --accent-foreground: var(--maroon-deep);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(0.88 0.02 150);
+  --input: oklch(0.9 0.015 150);
+  --ring: var(--gold);
+
+  /* Premium header / divider tokens. Edit here, every header updates. */
+  --header-from: color-mix(in oklab, var(--maroon) 8%, #ffffff);
+  --header-via: color-mix(in oklab, var(--maroon) 3%, var(--cream));
+  --header-to: var(--cream);
+  --header-border: color-mix(in oklab, var(--maroon) 22%, transparent);
+  --header-glow: color-mix(in oklab, var(--gold) 22%, transparent);
+  --divider-color: color-mix(in oklab, var(--maroon) 22%, transparent);
+  --divider-strong: color-mix(in oklab, var(--gold) 50%, transparent);
+
+  /* Premium effect tokens */
+  --shadow-premium: 0 10px 40px -12px color-mix(in oklab, var(--maroon) 35%, transparent),
+                    0 2px 4px -1px color-mix(in oklab, var(--maroon) 15%, transparent);
+  --shadow-gold: 0 8px 30px -10px color-mix(in oklab, var(--gold) 55%, transparent);
+  --gradient-emerald: linear-gradient(135deg, var(--maroon) 0%, var(--maroon-deep) 100%);
+  --gradient-gold: linear-gradient(135deg, var(--gold-soft) 0%, var(--gold) 50%, var(--saffron-deep) 100%);
+  --gradient-surface: linear-gradient(180deg, #ffffff 0%, var(--cream) 100%);
+}
+
+.dark {
+  --background: var(--maroon-deep);
+  --foreground: var(--cream);
+}
+
+/* Admin SaaS surface — teal-tinted off-white.
+   Applied via `.admin-surface` wrapper on AdminLayout, so every
+   descendant utility that resolves through --cream / --cream-warm
+   (bg-cream, border-cream, etc.) automatically adopts the cooler
+   SaaS background without touching individual admin pages. */
+.admin-surface {
+  --cream: #f7f3e8;
+  --cream-warm: #efe7cf;
+  --background: var(--cream);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+  }
+
+  input, select, textarea {
+    font-family: var(--font-sans);
+  }
+}
+
+@utility text-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+@utility splash-bg {
+  background:
+    radial-gradient(ellipse at 50% 0%, oklch(0.92 0.1 80) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 100%, oklch(0.78 0.15 55) 0%, transparent 65%),
+    linear-gradient(180deg, oklch(0.96 0.04 85) 0%, oklch(0.88 0.1 70) 50%, oklch(0.75 0.16 55) 100%);
+}
+
+@utility logo-glow {
+  filter: drop-shadow(0 0 40px oklch(0.78 0.16 65 / 0.55))
+          drop-shadow(0 0 80px oklch(0.78 0.13 85 / 0.4))
+          drop-shadow(0 10px 30px oklch(0.38 0.14 25 / 0.25));
+}
+
+/* Subtle teal-tinted header bar.
+   Reads --header-* tokens so palette tweaks update every header globally.
+   Mobile-tuned: tighter padding + smaller min-height on small screens,
+   roomier and more refined from sm: up. */
+@utility header-gradient {
+  background-image: linear-gradient(
+    180deg,
+    var(--header-from) 0%,
+    var(--header-via) 60%,
+    var(--header-to) 100%
+  );
+  border-bottom: 1px solid var(--header-border);
+  box-shadow: 0 1px 0 0 var(--header-glow);
+  min-height: 3.25rem;
+  letter-spacing: 0.005em;
+}
+@media (min-width: 640px) {
+  .header-gradient {
+    min-height: 3.75rem;
+    box-shadow:
+      0 1px 0 0 var(--header-glow),
+      0 6px 16px -12px color-mix(in oklab, var(--maroon) 30%, transparent);
+  }
+}
+
+/* Thin teal hairline divider with a soft fade at both ends.
+   Use the <SectionDivider /> component or `<div className="section-divider" />`. */
+@utility section-divider {
+  height: 1px;
+  width: 100%;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--divider-color) 50%,
+    transparent 100%
+  );
+}
+
+/* ============================================================
+   Premium admin utilities — emerald + champagne gold accents.
+   ============================================================ */
+
+@utility premium-card {
+  background: var(--gradient-surface);
+  border: 1px solid color-mix(in oklab, var(--gold) 25%, transparent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-premium);
+  transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+@utility premium-card-hover {
+  &:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in oklab, var(--gold) 55%, transparent);
+    box-shadow: var(--shadow-gold), var(--shadow-premium);
+  }
+}
+
+@utility gold-text {
+  background: var(--gradient-gold);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility emerald-surface {
+  background: var(--gradient-emerald);
+  color: var(--cream);
+}
+
+@utility btn-premium {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: calc(var(--radius) + 0.25rem);
+  padding: 0.7rem 1.25rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  letter-spacing: 0.01em;
+  background: var(--gradient-emerald);
+  color: var(--cream);
+  border: 1px solid color-mix(in oklab, var(--gold) 35%, transparent);
+  box-shadow: var(--shadow-premium);
+  transition: transform 150ms ease, box-shadow 200ms ease;
+  &:hover { transform: translateY(-1px); box-shadow: var(--shadow-gold), var(--shadow-premium); }
+  &:active { transform: translateY(0); }
+  &:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+}
+
+@utility btn-gold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: calc(var(--radius) + 0.25rem);
+  padding: 0.65rem 1.1rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  background: var(--gradient-gold);
+  color: var(--maroon-deep);
+  border: 1px solid color-mix(in oklab, var(--saffron-deep) 40%, transparent);
+  box-shadow: var(--shadow-gold);
+  transition: transform 150ms ease;
+  &:hover { transform: translateY(-1px); }
+}
+
+@utility input-premium {
+  width: 100%;
+  border-radius: calc(var(--radius) - 0.125rem);
+  border: 1px solid color-mix(in oklab, var(--maroon) 18%, transparent);
+  background: #ffffff;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  color: var(--maroon-deep);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  &:focus {
+    outline: none;
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--gold) 25%, transparent);
+  }
+  &::placeholder { color: color-mix(in oklab, var(--maroon-deep) 35%, transparent); }
+}
+
+@utility input-error {
+  border-color: var(--destructive) !important;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive) 18%, transparent) !important;
+}
+
+@utility chip-premium {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: color-mix(in oklab, var(--gold) 18%, var(--cream));
+  color: var(--maroon-deep);
+  border: 1px solid color-mix(in oklab, var(--gold) 40%, transparent);
+}
+
+@utility ring-gold {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--gold) 55%, transparent),
+              var(--shadow-gold);
+}
