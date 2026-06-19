@@ -238,9 +238,37 @@ function WalkinPage() {
       return;
     }
 
+    if (!cart.length) {
+      toast.error("Please add items to cart");
+      return;
+    }
+
+    if (!effectiveOutletId) {
+      toast.error("Please select an outlet");
+      return;
+    }
+
     setIsMocking(true);
     try {
-      // Prepare order items in the correct format
+      // STEP 1: Create the walk-in order first
+      const createOrderRes = await createFn({
+        data: {
+          outletId: effectiveOutletId,
+          items: cart,
+          walkInName: name || null,
+          walkInPhone: phoneNumber,
+          tableNumber: table || null,
+          paymentMode: "upi",
+          discountAmount: Number(discount) || 0,
+          taxPercent: Number(taxPct) || 0,
+          notes: notes || null,
+        },
+      });
+
+      console.log("Order created:", createOrderRes);
+      toast.success(`Order ${createOrderRes.orderNumber} created`);
+
+      // STEP 2: Prepare PhonePe payload with order details
       const order_items = cart.map((l) => {
         const item = items.find((i: any) => i.id === l.itemId);
         return {
@@ -257,7 +285,6 @@ function WalkinPage() {
         };
       });
 
-      // Ensure total matches calculation
       const totalAmount = Number(grand.toFixed(2));
       
       const payload = {
@@ -268,11 +295,13 @@ function WalkinPage() {
         order_items: order_items,
         order_type: `Online-${effectiveOutletId || "default"}`,
         restaurant_id: 1,
-        payment_status: "PENDING"
+        payment_status: "PENDING",
+        order_id: createOrderRes.orderId // Include the order ID
       };
 
       console.log("Sending PhonePe payload:", payload);
 
+      // STEP 3: Call PhonePe API
       const response = await axios.post(
         "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
         payload,
@@ -286,7 +315,7 @@ function WalkinPage() {
 
       console.log("PhonePe response:", response.data);
 
-      // Try to extract redirect URL from various possible response structures
+      // Extract redirect URL
       let redirectUrl = null;
       if (response.data?.result?.redirectUrl) {
         redirectUrl = response.data.result.redirectUrl;
@@ -298,49 +327,25 @@ function WalkinPage() {
         redirectUrl = response.data.url;
       }
 
+      // STEP 4: Update the placed order state
+      setPlaced({
+        orderId: createOrderRes.orderId,
+        orderNumber: createOrderRes.orderNumber,
+        paymentMode: "upi",
+        redirectUrl: redirectUrl || undefined,
+        status: redirectUrl ? "awaiting_upi" : "upi_pending",
+      });
+
       if (redirectUrl) {
         window.open(redirectUrl, "_blank", "noopener,noreferrer");
         toast.success("PhonePe checkout opened!");
-        
-        // Update the placed order state with UPI info
-        if (placed && placed.paymentMode === "upi") {
-          setPlaced({
-            ...placed,
-            redirectUrl: redirectUrl,
-            status: "awaiting_upi"
-          });
-        } else {
-          // If no order is placed yet, create a temporary order state
-          const tempOrderId = `TEMP_${Date.now()}`;
-          setPlaced({
-            orderId: tempOrderId,
-            orderNumber: `TEMP-${Date.now().toString().slice(-6)}`,
-            paymentMode: "upi",
-            redirectUrl: redirectUrl,
-            status: "awaiting_upi"
-          });
-          toast.info("Temporary order created. Please verify payment when done.");
-        }
       } else {
-        // If no redirect URL, maybe show QR code or payment ID
-        toast.success("PhonePe order created successfully!");
-        console.log("Response without redirect URL:", response.data);
-        
-        // If we got an order ID, update the state
-        if (response.data?.result?.orderId) {
-          setPlaced({
-            orderId: response.data.result.orderId,
-            orderNumber: response.data.result.orderNumber || `ORD-${Date.now().toString().slice(-6)}`,
-            paymentMode: "upi",
-            status: "upi_pending"
-          });
-        }
+        toast.info("PhonePe order created. Please verify payment.");
       }
 
     } catch (error: any) {
-      console.error("PhonePe API Error:", error);
+      console.error("Error in PhonePe flow:", error);
       
-      // Enhanced error handling
       if (error.response) {
         console.error("Error response data:", error.response.data);
         console.error("Error response status:", error.response.status);
@@ -348,19 +353,19 @@ function WalkinPage() {
         if (error.response.status === 400) {
           const errorData = error.response.data;
           if (errorData?.errorCode === "INTERNAL_SECURITY_BLOCK") {
-            toast.error("Security validation failed. Please check the customer phone number and try again.");
+            toast.error("Security validation failed. Please check the customer phone number.");
           } else if (typeof errorData === "string") {
             toast.error(errorData || "Bad request - please check all fields");
           } else {
             toast.error(errorData?.message || errorData?.errorCode || "Invalid request - please verify all fields");
           }
         } else if (error.response.status === 500) {
-          toast.error("Server error - PhonePe service may be unavailable");
+          toast.error("Server error - service may be unavailable");
         } else {
           toast.error(`Error ${error.response.status}: ${error.response.data?.message || "Payment failed"}`);
         }
       } else if (error.request) {
-        toast.error("No response from server - please check your internet connection");
+        toast.error("No response from server - please check your connection");
       } else {
         toast.error(error.message || "Failed to create PhonePe order");
       }
@@ -371,7 +376,7 @@ function WalkinPage() {
 
   const [isMockPayment, setIsMockPayment] = useState(false);
   const handleMockPaymentSuccess = () => {
-    // This is a fallback for testing when PhonePe API is not working
+    // Fallback for testing when PhonePe API is not working
     if (placed && placed.paymentMode === "upi") {
       setPlaced({
         ...placed,
@@ -483,8 +488,17 @@ function WalkinPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <Input placeholder="Customer name (opt.)" value={name} onChange={(e) => setName(e.target.value)} />
-                <Input placeholder="Phone (opt.)" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                <Input 
+                  placeholder="Customer name (opt.)" 
+                  value={name} 
+                  onChange={(e) => setName(e.target.value)} 
+                />
+                <Input 
+                  placeholder="Phone (required for UPI)" 
+                  value={phone} 
+                  onChange={(e) => setPhone(e.target.value)} 
+                  className={paymentMode === "upi" && (!phone || phone.length !== 10) ? "border-red-500" : ""}
+                />
                 <Input placeholder="Table # (opt.)" value={table} onChange={(e) => setTable(e.target.value)} />
                 <Input type="number" min={0} placeholder="Discount ₹" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} />
                 <Input type="number" min={0} step="0.01" placeholder="Tax %" value={taxPct} onChange={(e) => setTaxPct(Number(e.target.value))} />
@@ -513,19 +527,30 @@ function WalkinPage() {
 
               {paymentMode === "upi" && (
                 <div className="space-y-2">
+                  <div className="rounded-md bg-blue-50 p-2 text-[11px] text-blue-700 border border-blue-200">
+                    <p className="font-semibold">📱 UPI Payment Flow:</p>
+                    <ol className="list-decimal list-inside mt-1 space-y-0.5">
+                      <li>Enter customer's 10-digit phone number</li>
+                      <li>Click "Pay with PhonePe"</li>
+                      <li>Order will be created and PhonePe checkout will open</li>
+                      <li>After payment, click "Verify Payment"</li>
+                    </ol>
+                  </div>
+                  
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={!cart.length || isMocking}
+                    disabled={!cart.length || isMocking || !phone || phone.length !== 10}
                     onClick={() => handleMock()}
                     className="w-full border-dashed border-saffron text-maroon"
                   >
-                    {isMocking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                    Mock PhonePe API (test)
+                    {isMocking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Smartphone className="mr-2 h-4 w-4" />}
+                    {isMocking ? "Processing..." : "Pay with PhonePe"}
                   </Button>
-                  {!isMocking && (
-                    <p className="text-[10px] text-muted-foreground text-center">
-                      💡 Make sure to enter a valid 10-digit phone number above
+                  
+                  {(!phone || phone.length !== 10) && (
+                    <p className="text-[10px] text-destructive text-center">
+                      ⚠️ Please enter a valid 10-digit phone number
                     </p>
                   )}
                 </div>
@@ -541,8 +566,8 @@ function WalkinPage() {
             <div className="flex justify-between text-base font-bold text-maroon"><span>Total</span><span>₹{grand.toFixed(2)}</span></div>
           </div>
 
-          {/* STEP 1: Place Order */}
-          {!placed && (
+          {/* STEP 1: Place Order (for Cash/Card) */}
+          {!placed && paymentMode !== "upi" && (
             <Button
               disabled={!cart.length || !effectiveOutletId || isPlacing}
               onClick={() => handlePlaceOrder()}
@@ -551,6 +576,13 @@ function WalkinPage() {
               {isPlacing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Place Order
             </Button>
+          )}
+
+          {/* For UPI, the order is created when clicking "Pay with PhonePe" */}
+          {!placed && paymentMode === "upi" && (
+            <div className="text-[11px] text-muted-foreground text-center border-t border-gold/20 pt-2">
+              Click "Pay with PhonePe" above to create order and start payment
+            </div>
           )}
 
           {/* STEP 2: Cash / Card → confirm collected */}
@@ -569,8 +601,10 @@ function WalkinPage() {
           {placed && (placed.status === "awaiting_upi" || placed.status === "upi_pending") && (
             <div className="space-y-2">
               <div className="rounded-md bg-saffron/10 p-2 text-[11px] text-maroon">
-                Customer pays via PhonePe. Open the checkout page below, then verify once paid.
+                <p className="font-semibold">📱 UPI Payment in progress</p>
+                <p className="mt-0.5">Order #{placed.orderNumber} • Total: ₹{grand.toFixed(2)}</p>
               </div>
+              
               {placed.redirectUrl && (
                 <a
                   href={placed.redirectUrl}
@@ -581,6 +615,7 @@ function WalkinPage() {
                   Open PhonePe Checkout ↗
                 </a>
               )}
+              
               <div className="flex gap-2">
                 <Button
                   disabled={isVerifying}
@@ -590,15 +625,21 @@ function WalkinPage() {
                   {isVerifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                   Verify Payment
                 </Button>
-                {/* Demo fallback button when API is not working */}
+                
+                {/* Demo fallback for testing */}
                 <Button
                   variant="outline"
                   onClick={() => handleMockPaymentSuccess()}
                   className="border-dashed border-green-500 text-green-600 hover:bg-green-50"
+                  title="Use this to complete payment in demo mode"
                 >
                   Demo Complete
                 </Button>
               </div>
+              
+              <p className="text-[10px] text-muted-foreground text-center">
+                After customer completes payment, click "Verify Payment"
+              </p>
             </div>
           )}
 
@@ -619,7 +660,12 @@ function WalkinPage() {
           {/* Paid → show Print Invoice */}
           {placed && placed.status === "paid" && (
             <div className="rounded-md border border-saffron/30 bg-saffron/10 p-2 text-[11px] text-maroon">
-              <div className="flex items-center gap-1 font-semibold"><CheckCircle2 className="h-3.5 w-3.5" /> Payment confirmed · Invoice generated</div>
+              <div className="flex items-center gap-1 font-semibold">
+                <CheckCircle2 className="h-3.5 w-3.5" /> Payment confirmed · Invoice generated
+              </div>
+              {placed.invoiceId && (
+                <p className="text-[10px] text-muted-foreground mt-0.5">Invoice #{placed.invoiceId}</p>
+              )}
             </div>
           )}
 
