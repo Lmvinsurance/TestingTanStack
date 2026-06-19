@@ -1,9 +1,9 @@
-import { Link, useLocation } from "react-router-dom";;
+import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, ShoppingBag, Utensils, Users, Store, Tag, Layers,
   Leaf, Soup, Sliders, DollarSign, PackageCheck, Image as ImageIcon,
   CreditCard, Receipt, BarChart3, Plus, LogOut, ChefHat, ConciergeBell,
-  Upload,
+  Upload, Smartphone,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
@@ -12,7 +12,7 @@ import {
   SidebarProvider, SidebarTrigger, useSidebar,
 } from "@/components/ui/sidebar";
 import { adminSignOut } from "@/lib/auth-helpers";
-import { useNavigate } from "react-router-dom";;
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import kostaLogo from "@/assets/kosta-rajula-ruchulu-logo.asset.json";
 
@@ -49,6 +49,7 @@ const NAV_GROUPS = [
       { title: "Invoices", to: "/admin/invoices", icon: Receipt },
       { title: "Reports", to: "/admin/reports", icon: BarChart3 },
       { title: "Bulk Upload", to: "/admin/bulk-upload", icon: Upload },
+      { title: "Payment Test", to: "/admin/payment-test", icon: Smartphone },
     ],
   },
 ] as const;
@@ -88,6 +89,7 @@ function AppSidebar() {
               <SidebarMenu>
                 {group.items.map((item) => {
                   const active = pathname === item.to;
+                  const isTest = item.title === "Payment Test";
                   return (
                     <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton asChild isActive={active}>
@@ -96,7 +98,16 @@ function AppSidebar() {
                           className={`flex items-center gap-2 ${active ? "bg-saffron/15 text-maroon" : "text-maroon-deep/80 hover:bg-saffron/10"}`}
                         >
                           <item.icon className="h-4 w-4 shrink-0" />
-                          {!collapsed && <span className="truncate">{item.title}</span>}
+                          {!collapsed && (
+                            <>
+                              <span className="truncate">{item.title}</span>
+                              {isTest && (
+                                <span className="ml-auto text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded">
+                                  Test
+                                </span>
+                              )}
+                            </>
+                          )}
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

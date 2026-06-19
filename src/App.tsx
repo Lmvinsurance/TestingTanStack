@@ -3,7 +3,7 @@ import React, { Suspense } from "react";
 
 // Layouts / Root
 import RootLayout from "./pages/__root";
-
+import AdminPaymentTest from "./pages/admin.payment-test";
 // Pages
 import Index from "./pages/index";
 import Brands from "./pages/brands";
@@ -79,6 +79,7 @@ export default function App() {
           <Route path="/admin/login" element={<AdminLogin />} />
           
           <Route element={<AdminLayoutWrapper />}>
+           <Route path="/admin/payment-test" element={<AdminPaymentTest />} />
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/brands" element={<AdminBrands />} />
             <Route path="/admin/categories" element={<AdminCategories />} />
