@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";;
+import { useNavigate } from "react-router-dom";
 import { useServerFn } from "@/lib/react-start-mock";
 import { useMemo, useState, useEffect } from "react";
 import { toast } from "sonner";
@@ -18,8 +18,6 @@ import {
   verifyWalkinUpi,
 } from "@/lib/admin-walkin.functions";
 
-
-
 type CartLine = {
   variantId: string;
   itemId: string;
@@ -35,7 +33,6 @@ type PlacedOrder = {
   orderNumber: string;
   paymentMode: PayMode;
   redirectUrl?: string;
-  // local state machine
   status: "awaiting_collection" | "awaiting_upi" | "upi_pending" | "paid" | "upi_failed";
   invoiceId?: string;
 };
@@ -112,7 +109,7 @@ function WalkinPage() {
 
   const filtered = useMemo(() => {
     const t = search.trim().toLowerCase();
-    return items.filter((it) => {
+    return items.filter((it: any) => {
       if (category && it.category !== category) return false;
       if (t && !it.name.toLowerCase().includes(t)) return false;
       return true;
@@ -234,15 +231,23 @@ function WalkinPage() {
 
   const [isMocking, setIsMocking] = useState(false);
   const handleMock = async () => {
+    // Validate phone number
+    const phoneNumber = phone.trim();
+    if (!phoneNumber || phoneNumber.length !== 10) {
+      toast.error("Please enter a valid 10-digit phone number");
+      return;
+    }
+
     setIsMocking(true);
     try {
+      // Prepare order items in the correct format
       const order_items = cart.map((l) => {
-        const item = items.find((i) => i.id === l.itemId);
+        const item = items.find((i: any) => i.id === l.itemId);
         return {
-          item_id: Number(l.itemId) || l.itemId,
+          item_id: l.itemId,
           title: l.itemName,
-          description: "",
-          item_type: "NonVeg",
+          description: l.variantName || "",
+          item_type: "Veg",
           is_available: true,
           image_url: (item as any)?.imageUrl ?? (item as any)?.image_url ?? "",
           variants: { [l.variantName]: l.unitPrice },
@@ -251,48 +256,132 @@ function WalkinPage() {
           quantity: l.quantity,
         };
       });
-      const payload = {
-        mobilenumber: phone || "9878987988",
-        customer_name: name || "Walkin",
-        total_amount: grand,
-        order_status: "PENDING",
-        order_items,
-        order_type: "Online-Kompelly",
-        restaurant_id: 1,
-        payment_status: "PENDING",
-      };
+
+      // Ensure total matches calculation
+      const totalAmount = Number(grand.toFixed(2));
       
+      const payload = {
+        mobilenumber: phoneNumber,
+        customer_name: name || "Walk-in Customer",
+        total_amount: totalAmount,
+        order_status: "PENDING",
+        order_items: order_items,
+        order_type: `Online-${effectiveOutletId || "default"}`,
+        restaurant_id: 1,
+        payment_status: "PENDING"
+      };
+
+      console.log("Sending PhonePe payload:", payload);
+
       const response = await axios.post(
         "https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/api/admin/phonepay/order",
         payload,
-        { headers: { "Content-Type": "application/json" } }
+        { 
+          headers: { 
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          } 
+        }
       );
-      const data = response.data;
-      const url =
-        data?.result?.redirectUrl ??
-        data?.redirectUrl ??
-        data?.data?.instrumentResponse?.redirectInfo?.url ??
-        data?.url;
-      if (url) {
-        window.open(url, "_blank", "noopener,noreferrer");
-        toast.success("Mock PhonePe order created — opened checkout");
-      } else {
-        toast.success("Mock PhonePe order created");
+
+      console.log("PhonePe response:", response.data);
+
+      // Try to extract redirect URL from various possible response structures
+      let redirectUrl = null;
+      if (response.data?.result?.redirectUrl) {
+        redirectUrl = response.data.result.redirectUrl;
+      } else if (response.data?.redirectUrl) {
+        redirectUrl = response.data.redirectUrl;
+      } else if (response.data?.data?.instrumentResponse?.redirectInfo?.url) {
+        redirectUrl = response.data.data.instrumentResponse.redirectInfo.url;
+      } else if (response.data?.url) {
+        redirectUrl = response.data.url;
       }
-    } catch (error: any) {
-      if (error.response) {
-        toast.error(typeof error.response.data === "string" ? error.response.data : error.response.data?.message || `HTTP ${error.response.status}`);
-      } else if (error.request) {
-        toast.error("No response received from server");
+
+      if (redirectUrl) {
+        window.open(redirectUrl, "_blank", "noopener,noreferrer");
+        toast.success("PhonePe checkout opened!");
+        
+        // Update the placed order state with UPI info
+        if (placed && placed.paymentMode === "upi") {
+          setPlaced({
+            ...placed,
+            redirectUrl: redirectUrl,
+            status: "awaiting_upi"
+          });
+        } else {
+          // If no order is placed yet, create a temporary order state
+          const tempOrderId = `TEMP_${Date.now()}`;
+          setPlaced({
+            orderId: tempOrderId,
+            orderNumber: `TEMP-${Date.now().toString().slice(-6)}`,
+            paymentMode: "upi",
+            redirectUrl: redirectUrl,
+            status: "awaiting_upi"
+          });
+          toast.info("Temporary order created. Please verify payment when done.");
+        }
       } else {
-        toast.error(error.message || "Request failed");
+        // If no redirect URL, maybe show QR code or payment ID
+        toast.success("PhonePe order created successfully!");
+        console.log("Response without redirect URL:", response.data);
+        
+        // If we got an order ID, update the state
+        if (response.data?.result?.orderId) {
+          setPlaced({
+            orderId: response.data.result.orderId,
+            orderNumber: response.data.result.orderNumber || `ORD-${Date.now().toString().slice(-6)}`,
+            paymentMode: "upi",
+            status: "upi_pending"
+          });
+        }
+      }
+
+    } catch (error: any) {
+      console.error("PhonePe API Error:", error);
+      
+      // Enhanced error handling
+      if (error.response) {
+        console.error("Error response data:", error.response.data);
+        console.error("Error response status:", error.response.status);
+        
+        if (error.response.status === 400) {
+          const errorData = error.response.data;
+          if (errorData?.errorCode === "INTERNAL_SECURITY_BLOCK") {
+            toast.error("Security validation failed. Please check the customer phone number and try again.");
+          } else if (typeof errorData === "string") {
+            toast.error(errorData || "Bad request - please check all fields");
+          } else {
+            toast.error(errorData?.message || errorData?.errorCode || "Invalid request - please verify all fields");
+          }
+        } else if (error.response.status === 500) {
+          toast.error("Server error - PhonePe service may be unavailable");
+        } else {
+          toast.error(`Error ${error.response.status}: ${error.response.data?.message || "Payment failed"}`);
+        }
+      } else if (error.request) {
+        toast.error("No response from server - please check your internet connection");
+      } else {
+        toast.error(error.message || "Failed to create PhonePe order");
       }
     } finally {
       setIsMocking(false);
     }
   };
 
-
+  const [isMockPayment, setIsMockPayment] = useState(false);
+  const handleMockPaymentSuccess = () => {
+    // This is a fallback for testing when PhonePe API is not working
+    if (placed && placed.paymentMode === "upi") {
+      setPlaced({
+        ...placed,
+        status: "paid"
+      });
+      toast.success("✅ Payment successful (demo mode)");
+    } else {
+      toast.error("No active UPI order to complete");
+    }
+  };
 
   const printDisabled = !placed || placed.status !== "paid";
 
@@ -321,7 +410,7 @@ function WalkinPage() {
 
           <div className="flex flex-wrap gap-1.5">
             <button onClick={() => setCategory("")} className={`rounded-full border px-3 py-1 text-xs ${!category ? "border-saffron bg-saffron text-cream" : "border-gold/30 bg-card text-maroon"}`}>All</button>
-            {categories.map((c) => (
+            {categories.map((c: string) => (
               <button key={c} onClick={() => setCategory(c)} className={`rounded-full border px-3 py-1 text-xs ${category === c ? "border-saffron bg-saffron text-cream" : "border-gold/30 bg-card text-maroon"}`}>{c}</button>
             ))}
           </div>
@@ -333,12 +422,12 @@ function WalkinPage() {
           )}
 
           <div className="grid gap-2 sm:grid-cols-2">
-            {filtered.map((it) => (
+            {filtered.map((it: any) => (
               <div key={it.id} className="rounded-xl border border-gold/20 bg-card p-3">
                 <p className="text-sm font-semibold text-maroon">{it.name}</p>
                 <p className="text-[11px] text-muted-foreground">{it.category}</p>
                 <div className="mt-2 space-y-1">
-                  {it.variants.map((v) => (
+                  {it.variants.map((v: any) => (
                     <button
                       key={v.id}
                       disabled={!!placed}
@@ -423,6 +512,7 @@ function WalkinPage() {
               </div>
 
               {paymentMode === "upi" && (
+                <div className="space-y-2">
                   <Button
                     type="button"
                     variant="outline"
@@ -433,6 +523,12 @@ function WalkinPage() {
                     {isMocking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     Mock PhonePe API (test)
                   </Button>
+                  {!isMocking && (
+                    <p className="text-[10px] text-muted-foreground text-center">
+                      💡 Make sure to enter a valid 10-digit phone number above
+                    </p>
+                  )}
+                </div>
               )}
             </>
           )}
@@ -485,14 +581,24 @@ function WalkinPage() {
                   Open PhonePe Checkout ↗
                 </a>
               )}
-              <Button
-                disabled={isVerifying}
-                onClick={() => handleVerify()}
-                className="w-full bg-gradient-to-br from-saffron to-saffron-deep text-cream"
-              >
-                {isVerifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                Verify Payment
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  disabled={isVerifying}
+                  onClick={() => handleVerify()}
+                  className="flex-1 bg-gradient-to-br from-saffron to-saffron-deep text-cream"
+                >
+                  {isVerifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                  Verify Payment
+                </Button>
+                {/* Demo fallback button when API is not working */}
+                <Button
+                  variant="outline"
+                  onClick={() => handleMockPaymentSuccess()}
+                  className="border-dashed border-green-500 text-green-600 hover:bg-green-50"
+                >
+                  Demo Complete
+                </Button>
+              </div>
             </div>
           )}
 
