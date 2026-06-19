@@ -3,7 +3,7 @@ import React, { Suspense } from "react";
 
 // Layouts / Root
 import RootLayout from "./pages/__root";
-import AdminPaymentTest from "./pages/admin.payment-test";
+import AdminPaymentTest from "@/pages/admin.payment-test";
 // Pages
 import Index from "./pages/index";
 import Brands from "./pages/brands";
