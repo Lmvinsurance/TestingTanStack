@@ -4,6 +4,9 @@ import React, { Suspense } from "react";
 // Layouts / Root
 import RootLayout from "./pages/__root";
 import AdminPaymentTest from "@/pages/admin.payment-test";
+import PaymentConfirmation from "@/pages/admin/PaymentConfirmation";
+import AdminOrderStatus from "@/pages/admin/AdminOrderStatus"; // This should now work
+
 // Pages
 import Index from "./pages/index";
 import Brands from "./pages/brands";
@@ -36,7 +39,6 @@ import AdminBulkUpload from "./pages/admin.bulk-upload";
 // Customer routes
 import CustomerSignin from "./pages/customer.signin";
 import CustomerSignup from "./pages/customer.signup";
-// Import the new CustomerMenuPage
 import { CustomerMenuPage } from "./components/CustomerMenuPage";
 import CustomerCheckout from "./pages/checkout";
 import CustomerOrders from "./pages/customer.my-orders";
@@ -79,7 +81,12 @@ export default function App() {
           <Route path="/admin/login" element={<AdminLogin />} />
           
           <Route element={<AdminLayoutWrapper />}>
-           <Route path="/admin/payment-test" element={<AdminPaymentTest />} />
+            {/* Payment Routes */}
+            <Route path="/admin/payment-test" element={<AdminPaymentTest />} />
+            <Route path="/admin/payment-confirmation" element={<PaymentConfirmation />} />
+            <Route path="/admin/order-status/:orderId" element={<AdminOrderStatus />} />
+            
+            {/* Other Admin Routes */}
             <Route path="/admin/dashboard" element={<AdminDashboard />} />
             <Route path="/admin/brands" element={<AdminBrands />} />
             <Route path="/admin/categories" element={<AdminCategories />} />

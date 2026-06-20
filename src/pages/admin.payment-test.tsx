@@ -19,7 +19,7 @@ import {
   listWalkinMenu,
 } from '@/lib/admin-walkin.functions';
 
-// CORRECT Supabase Edge Function URL
+// Supabase Edge Function URL
 const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
 const BUCKET = 'invoices';
 
@@ -271,7 +271,6 @@ export default function AdminPaymentTest() {
     };
   }, []);
 
-  // Generate merchant transaction ID in format: ORDID + timestamp
   const generateMerchantTransactionId = () => {
     const timestamp = Date.now();
     return `ORDID${timestamp}`;
@@ -321,7 +320,6 @@ export default function AdminPaymentTest() {
       const { error: itemsError } = await supabaseAdmin.from("order_items").insert(orderItems);
       if (itemsError) throw new Error('Failed to create order items: ' + itemsError.message);
 
-      // Generate merchant transaction ID in format: ORDID + timestamp
       const merchantTransactionId = generateMerchantTransactionId();
       
       const pMode = paymentMode === 'upi' ? 'upi' : paymentMode === 'card_machine' ? 'card' : 'cash';
@@ -456,7 +454,6 @@ export default function AdminPaymentTest() {
         invoiceUrl: pubData.publicUrl,
       });
       
-      // Fetch complete order details for display
       await fetchOrderDetails(orderId);
       
       toast.success(`Invoice generated successfully!`);
@@ -469,7 +466,6 @@ export default function AdminPaymentTest() {
 
   const fetchOrderDetails = async (orderId: string) => {
     try {
-      // Fetch order with all related data
       const { data: order, error: orderError } = await supabaseAdmin
         .from("orders")
         .select(`
@@ -502,7 +498,6 @@ export default function AdminPaymentTest() {
     }
   };
 
-  // Verify payment through Supabase Edge Function
   const verifyPhonePePayment = async (merchantTransactionId: string, isManual = false) => {
     try {
       if (!isManual) {
@@ -510,7 +505,6 @@ export default function AdminPaymentTest() {
         setVerificationAttempts(prev => prev + 1);
       }
       
-      // First check if already paid in database
       if (currentOrderId) {
         const orderStatus = await checkPaymentStatusFromDB(currentOrderId);
         if (orderStatus && orderStatus.payment_status === 'paid') {
@@ -520,14 +514,12 @@ export default function AdminPaymentTest() {
           stopPolling();
           setShowPaymentChannel(false);
           
-          // Fetch and show order details
           await fetchOrderDetails(currentOrderId);
           
           return { success: true, alreadyPaid: true };
         }
       }
 
-      // Call Supabase Edge Function to check PhonePe payment status
       try {
         const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
           action: 'status',
@@ -537,7 +529,6 @@ export default function AdminPaymentTest() {
         if (response.data) {
           const result = response.data;
           
-          // Check payment status from response
           const isSuccess = 
             result.state === 'COMPLETED' || 
             result.status === 'SUCCESS' ||
@@ -554,7 +545,6 @@ export default function AdminPaymentTest() {
             setShowPaymentChannel(false);
             toast.success(`Payment successful!`);
             
-            // Fetch and show order details
             if (currentOrderId) {
               await fetchOrderDetails(currentOrderId);
             }
@@ -571,7 +561,6 @@ export default function AdminPaymentTest() {
             setShowRetryButton(true);
             return { success: false, status: 'failed' };
           } else {
-            // Still pending
             return { success: false, status: 'pending' };
           }
         }
@@ -579,7 +568,6 @@ export default function AdminPaymentTest() {
       } catch (err: any) {
         console.error('Supabase Edge Function error:', err.response?.data || err.message);
         
-        // If API call fails, check database status
         if (currentOrderId) {
           const dbCheck = await checkPaymentStatusFromDB(currentOrderId);
           if (dbCheck && dbCheck.payment_status === 'paid') {
@@ -589,7 +577,6 @@ export default function AdminPaymentTest() {
             stopPolling();
             setShowPaymentChannel(false);
             
-            // Fetch and show order details
             await fetchOrderDetails(currentOrderId);
             
             return { success: true };
@@ -608,6 +595,11 @@ export default function AdminPaymentTest() {
   // Navigate to order status page
   const goToOrderStatus = (orderId: string) => {
     navigate(`/admin/order-status/${orderId}`);
+  };
+
+  // Navigate to payment confirmation page
+  const goToPaymentConfirmation = (orderId: string) => {
+    navigate(`/admin/payment-confirmation?orderId=${orderId}`);
   };
 
   const processPayment = async () => {
@@ -630,7 +622,6 @@ export default function AdminPaymentTest() {
         toast.success(`${paymentMode} payment successful!`);
         setLoading(false);
         
-        // Fetch order details
         await fetchOrderDetails(order.id);
         
         // Navigate to order status page after delay
@@ -642,13 +633,15 @@ export default function AdminPaymentTest() {
 
       if (!paymentConfirmed && paymentMode === 'upi') {
         const amountPaise = Math.round(grand * 100);
+        
+        // UPDATED: Redirect to payment confirmation page
         const redirectUrl = `${window.location.origin}/admin/payment-confirmation?orderId=${order.id}`;
 
         const payload = {
           action: 'create',
           merchantOrderId: merchantTransactionId,
           amountPaise: amountPaise,
-          redirectUrl: redirectUrl,
+          redirectUrl: redirectUrl,  // Now points to payment confirmation page
           message: `Payment for Order #${order.order_number || order.id.slice(0, 8)}`,
           metaInfo: {
             orderId: order.id,
@@ -705,21 +698,20 @@ export default function AdminPaymentTest() {
               
               toast.success('Payment successful!');
               
-              // Fetch order details
               await fetchOrderDetails(order.id);
               
-              // Navigate to order status page
-              goToOrderStatus(order.id);
+              // UPDATED: Navigate to payment confirmation page
+              goToPaymentConfirmation(order.id);
               return;
             }
 
             const verificationResult = await verifyPhonePePayment(merchantTransactionId);
             if (verificationResult.success) {
               setLoading(false);
-              // Fetch order details and navigate
               if (order.id) {
                 await fetchOrderDetails(order.id);
-                goToOrderStatus(order.id);
+                // UPDATED: Navigate to payment confirmation page
+                goToPaymentConfirmation(order.id);
               }
             } else if (verificationResult.status === 'failed') {
               setLoading(false);
@@ -772,9 +764,9 @@ export default function AdminPaymentTest() {
         setVerifyingPayment(false);
         setShowPaymentChannel(false);
         
-        // Fetch order details and navigate
         await fetchOrderDetails(currentOrderId);
-        goToOrderStatus(currentOrderId);
+        // UPDATED: Navigate to payment confirmation page
+        goToPaymentConfirmation(currentOrderId);
         return;
       }
       
@@ -784,10 +776,10 @@ export default function AdminPaymentTest() {
         setVerifyingPayment(false);
         setShowPaymentChannel(false);
         
-        // Fetch order details and navigate
         if (currentOrderId) {
           await fetchOrderDetails(currentOrderId);
-          goToOrderStatus(currentOrderId);
+          // UPDATED: Navigate to payment confirmation page
+          goToPaymentConfirmation(currentOrderId);
         }
       } else if (result.status === 'failed') {
         setVerifyingPayment(false);
@@ -841,11 +833,11 @@ export default function AdminPaymentTest() {
               )}
               <Button 
                 size="sm"
-                onClick={() => goToOrderStatus(orderDetails.id)}
+                onClick={() => goToPaymentConfirmation(orderDetails.id)}
                 className="bg-green-600 hover:bg-green-700"
               >
                 <Eye className="mr-2 h-4 w-4" />
-                View Order Status
+                View Payment Status
               </Button>
             </div>
           </div>
@@ -1019,13 +1011,13 @@ export default function AdminPaymentTest() {
               <div className="rounded-md border border-green-500/30 bg-green-50 p-3 text-green-700 text-center">
                 <CheckCircle2 className="h-6 w-6 mx-auto mb-2" />
                 <p className="font-bold">Payment Confirmed!</p>
-                <p className="text-xs mt-1">Redirecting to order status...</p>
+                <p className="text-xs mt-1">Redirecting to payment confirmation...</p>
               </div>
               <Button 
-                onClick={() => goToOrderStatus(currentOrderId)} 
+                onClick={() => goToPaymentConfirmation(currentOrderId)} 
                 className="w-full bg-green-600 hover:bg-green-700 text-white"
               >
-                <Eye className="mr-2 h-4 w-4" /> View Order Status
+                <Eye className="mr-2 h-4 w-4" /> View Payment Status
               </Button>
             </div>
           )}
