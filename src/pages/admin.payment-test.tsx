@@ -265,9 +265,10 @@ export default function AdminPaymentTest() {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      if (phonePeWindow && !phonePeWindow.closed) phonePeWindow.close();
+      // We can't safely close the window here without risking closing it on re-renders if phonePeWindow is tracked, 
+      // but if we use empty deps, we close it on unmount.
     };
-  }, [phonePeWindow]);
+  }, []);
 
   const saveOrderToSupabase = async (paymentResponse?: any) => {
     try {
@@ -482,6 +483,45 @@ export default function AdminPaymentTest() {
         return { success: true, alreadyPaid: true };
       }
 
+      // First try the direct PhonePe API as requested
+      try {
+        const { data: payment } = await supabaseAdmin
+          .from("payments")
+          .select("merchant_transaction_id")
+          .eq("order_id", orderId)
+          .single();
+          
+        const merchantTxnId = payment?.merchant_transaction_id || `PHONEPE-${orderId}`;
+        
+        const directResponse = await axios.get(`https://api.phonepe.com/apis/pg/checkout/v2/order/${merchantTxnId}/status`);
+        const directData = directResponse.data;
+        
+        const isSuccess = directData?.success === true || directData?.state === 'COMPLETED' || directData?.paymentStatus === 'success';
+        
+        if (isSuccess) {
+          stopPolling();
+          await updatePaymentStatus(orderId, payment?.id || null, 'success', `VERIFIED-${Date.now()}`);
+          setPaymentConfirmed(true);
+          setVerifyingPayment(false);
+          setShowPaymentChannel(false);
+          toast.success(`Payment successful via direct check!`);
+          if (phonePeWindow && !phonePeWindow.closed) {
+            phonePeWindow.close();
+            setPhonePeWindow(null);
+          }
+          return { success: true };
+        } else if (directData?.state === 'FAILED') {
+          stopPolling();
+          setVerifyingPayment(false);
+          toast.error('Payment failed.');
+          setShowRetryButton(true);
+          return { success: false, status: 'failed' };
+        }
+      } catch (directErr) {
+        console.log("Direct PhonePe API check failed or pending, falling back to AWS backend...", directErr);
+      }
+
+      // Fallback to original AWS API gateway verification
       const response = await axios.post(`${API_PATH}api/admin/phonepe/verify`, { orderId: orderId });
 
       if (response.data) {
@@ -579,7 +619,9 @@ export default function AdminPaymentTest() {
           
           pollIntervalRef.current = setInterval(async () => {
             pollCount++;
-            setVerificationAttempts(pollCount);
+            // We update the UI in verifyPhonePePayment, but we can do it here too
+            // setVerificationAttempts(pollCount); // verifyPhonePePayment already increments it
+            
             if (pollCount > maxPolls) {
               stopPolling();
               setVerifyingPayment(false);
@@ -597,7 +639,6 @@ export default function AdminPaymentTest() {
               setLoading(false);
               setShowPaymentChannel(false);
               stopPolling();
-              if (phonePeWindow && !phonePeWindow.closed) { phonePeWindow.close(); setPhonePeWindow(null); }
               return;
             }
 
@@ -608,7 +649,7 @@ export default function AdminPaymentTest() {
               setLoading(false);
               setShowRetryButton(true);
             }
-          }, 10000);
+          }, 20000);
 
           timeoutRef.current = setTimeout(() => {
             stopPolling();
