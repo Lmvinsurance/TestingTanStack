@@ -13,13 +13,13 @@ import { AdminHeader, AdminPage } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2, FileText } from 'lucide-react';
+import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2, FileText, Eye } from 'lucide-react';
 import {
   listWalkinOutlets,
   listWalkinMenu,
 } from '@/lib/admin-walkin.functions';
 
-// Use Supabase Edge Function instead of AWS API Gateway
+// CORRECT Supabase Edge Function URL
 const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
 const BUCKET = 'invoices';
 
@@ -198,6 +198,7 @@ export default function AdminPaymentTest() {
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [showPaymentChannel, setShowPaymentChannel] = useState(false);
   const [paymentChannelUrl, setPaymentChannelUrl] = useState<string | null>(null);
+  const [orderDetails, setOrderDetails] = useState<any>(null);
 
   const pollIntervalRef = useRef<any>(null);
   const timeoutRef = useRef<any>(null);
@@ -253,6 +254,7 @@ export default function AdminPaymentTest() {
     setPaymentConfirmed(false);
     setShowPaymentChannel(false);
     setShowRetryButton(false);
+    setOrderDetails(null);
   }
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
@@ -453,11 +455,39 @@ export default function AdminPaymentTest() {
         orderNumber: order.order_number || orderId.slice(0, 8),
         invoiceUrl: pubData.publicUrl,
       });
+      
+      // Fetch complete order details for display
+      await fetchOrderDetails(orderId);
+      
       toast.success(`Invoice generated successfully!`);
       return { success: true, invoiceNumber: invoiceRecord.invoice_number || invoiceNumber };
     } catch (error) {
       toast.error('Failed to generate invoice');
       throw error;
+    }
+  };
+
+  const fetchOrderDetails = async (orderId: string) => {
+    try {
+      // Fetch order with all related data
+      const { data: order, error: orderError } = await supabaseAdmin
+        .from("orders")
+        .select(`
+          *,
+          order_items (*),
+          payments (*),
+          invoices (*)
+        `)
+        .eq("id", orderId)
+        .single();
+
+      if (orderError) throw orderError;
+      
+      setOrderDetails(order);
+      return order;
+    } catch (error) {
+      console.error('Error fetching order details:', error);
+      return null;
     }
   };
 
@@ -489,6 +519,10 @@ export default function AdminPaymentTest() {
           setVerifyingPayment(false);
           stopPolling();
           setShowPaymentChannel(false);
+          
+          // Fetch and show order details
+          await fetchOrderDetails(currentOrderId);
+          
           return { success: true, alreadyPaid: true };
         }
       }
@@ -504,7 +538,6 @@ export default function AdminPaymentTest() {
           const result = response.data;
           
           // Check payment status from response
-          // The Edge Function returns the raw PhonePe response
           const isSuccess = 
             result.state === 'COMPLETED' || 
             result.status === 'SUCCESS' ||
@@ -520,6 +553,12 @@ export default function AdminPaymentTest() {
             setVerifyingPayment(false);
             setShowPaymentChannel(false);
             toast.success(`Payment successful!`);
+            
+            // Fetch and show order details
+            if (currentOrderId) {
+              await fetchOrderDetails(currentOrderId);
+            }
+            
             if (phonePeWindow && !phonePeWindow.closed) {
               phonePeWindow.close();
               setPhonePeWindow(null);
@@ -549,6 +588,10 @@ export default function AdminPaymentTest() {
             setVerifyingPayment(false);
             stopPolling();
             setShowPaymentChannel(false);
+            
+            // Fetch and show order details
+            await fetchOrderDetails(currentOrderId);
+            
             return { success: true };
           }
         }
@@ -560,6 +603,11 @@ export default function AdminPaymentTest() {
       setVerifyingPayment(false);
       return { success: false, error: error.message };
     }
+  };
+
+  // Navigate to order status page
+  const goToOrderStatus = (orderId: string) => {
+    navigate(`/admin/order-status/${orderId}`);
   };
 
   const processPayment = async () => {
@@ -581,14 +629,19 @@ export default function AdminPaymentTest() {
         setPaymentConfirmed(true);
         toast.success(`${paymentMode} payment successful!`);
         setLoading(false);
+        
+        // Fetch order details
+        await fetchOrderDetails(order.id);
+        
+        // Navigate to order status page after delay
+        setTimeout(() => {
+          goToOrderStatus(order.id);
+        }, 1500);
         return;
       }
 
       if (!paymentConfirmed && paymentMode === 'upi') {
-        // Calculate amount in paise (PhonePe requires amount in paise)
         const amountPaise = Math.round(grand * 100);
-        
-        // Build redirect URL - this should point to your app/success page
         const redirectUrl = `${window.location.origin}/admin/payment-confirmation?orderId=${order.id}`;
 
         const payload = {
@@ -605,11 +658,9 @@ export default function AdminPaymentTest() {
           }
         };
 
-        // Use Supabase Edge Function to initiate payment
         const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, payload);
 
         if (response.status === 200 && response.data?.redirectUrl) {
-          // Update payment record with transaction details
           await updatePaymentStatus(order.id, payment.id, 'pending', merchantTransactionId);
 
           const channelUrl = response.data.redirectUrl;
@@ -622,7 +673,6 @@ export default function AdminPaymentTest() {
             setPhonePeWindow(newWindow);
           }
 
-          // Start polling for payment status
           let pollCount = 0;
           const maxPolls = 30;
           stopPolling();
@@ -647,13 +697,30 @@ export default function AdminPaymentTest() {
               setLoading(false);
               setShowPaymentChannel(false);
               stopPolling();
+              
+              if (phonePeWindow && !phonePeWindow.closed) {
+                phonePeWindow.close();
+                setPhonePeWindow(null);
+              }
+              
+              toast.success('Payment successful!');
+              
+              // Fetch order details
+              await fetchOrderDetails(order.id);
+              
+              // Navigate to order status page
+              goToOrderStatus(order.id);
               return;
             }
 
-            // Call Edge Function for verification
             const verificationResult = await verifyPhonePePayment(merchantTransactionId);
             if (verificationResult.success) {
               setLoading(false);
+              // Fetch order details and navigate
+              if (order.id) {
+                await fetchOrderDetails(order.id);
+                goToOrderStatus(order.id);
+              }
             } else if (verificationResult.status === 'failed') {
               setLoading(false);
               setShowRetryButton(true);
@@ -685,7 +752,6 @@ export default function AdminPaymentTest() {
     setVerifyingPayment(true);
     
     try {
-      // Get merchant transaction ID from database
       const { data: payment } = await supabaseAdmin
         .from("payments")
         .select("merchant_transaction_id")
@@ -705,6 +771,10 @@ export default function AdminPaymentTest() {
         setPaymentConfirmed(true);
         setVerifyingPayment(false);
         setShowPaymentChannel(false);
+        
+        // Fetch order details and navigate
+        await fetchOrderDetails(currentOrderId);
+        goToOrderStatus(currentOrderId);
         return;
       }
       
@@ -713,6 +783,12 @@ export default function AdminPaymentTest() {
         setPaymentConfirmed(true);
         setVerifyingPayment(false);
         setShowPaymentChannel(false);
+        
+        // Fetch order details and navigate
+        if (currentOrderId) {
+          await fetchOrderDetails(currentOrderId);
+          goToOrderStatus(currentOrderId);
+        }
       } else if (result.status === 'failed') {
         setVerifyingPayment(false);
         setShowRetryButton(true);
@@ -732,7 +808,50 @@ export default function AdminPaymentTest() {
 
   return (
     <AdminPage>
-      <AdminHeader title="Payment Test" subtitle="PhonePe via Supabase Edge Function" />
+      <AdminHeader 
+        title="Payment Test" 
+        subtitle="PhonePe via Supabase Edge Function" 
+      />
+      
+      {orderDetails && paymentConfirmed && (
+        <div className="mx-4 mb-4 rounded-lg border border-green-500/30 bg-green-50 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-green-700">Order Confirmed!</h3>
+              <p className="text-sm text-green-600">
+                Order #{orderDetails.order_number || orderDetails.id.slice(0, 8)} - 
+                Total: {fmt(orderDetails.grand_total)}
+              </p>
+              <p className="text-xs text-green-500">
+                Status: {orderDetails.order_status} • 
+                Payment: {orderDetails.payment_status}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {invoiceData && (
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={() => window.open(invoiceData.invoiceUrl, '_blank')}
+                  className="border-green-500 text-green-700"
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  View Invoice
+                </Button>
+              )}
+              <Button 
+                size="sm"
+                onClick={() => goToOrderStatus(orderDetails.id)}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                <Eye className="mr-2 h-4 w-4" />
+                View Order Status
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4 px-4 py-4 lg:grid-cols-[1fr_400px]">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -895,18 +1014,34 @@ export default function AdminPaymentTest() {
             </div>
           )}
 
-          {paymentConfirmed && currentOrderId && (
+          {paymentConfirmed && currentOrderId && !orderDetails && (
             <div className="space-y-4 mt-4">
               <div className="rounded-md border border-green-500/30 bg-green-50 p-3 text-green-700 text-center">
                 <CheckCircle2 className="h-6 w-6 mx-auto mb-2" />
                 <p className="font-bold">Payment Confirmed!</p>
+                <p className="text-xs mt-1">Redirecting to order status...</p>
               </div>
-              <Button onClick={() => navigate(`/admin/invoice/${currentOrderId}?format=thermal&print=1`)} className="w-full bg-green-600 hover:bg-green-700 text-white">
-                <Printer className="mr-2 h-4 w-4" /> Print Invoice
+              <Button 
+                onClick={() => goToOrderStatus(currentOrderId)} 
+                className="w-full bg-green-600 hover:bg-green-700 text-white"
+              >
+                <Eye className="mr-2 h-4 w-4" /> View Order Status
               </Button>
             </div>
           )}
 
+          {paymentConfirmed && invoiceData && (
+            <div className="space-y-2 mt-2">
+              <Button 
+                onClick={() => window.open(invoiceData.invoiceUrl, '_blank')}
+                variant="outline"
+                className="w-full border-saffron text-maroon"
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                View Invoice
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </AdminPage>
