@@ -1,10 +1,111 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import axios from 'axios';
 import { toast } from 'sonner';
 import { supabaseAdmin } from '@/integrations/supabase/client.server';
+import { supabase } from '@/integrations/supabase/client';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/button';
-import { Loader2, CheckCircle2, XCircle, Eye, RotateCcw, Home } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, Eye, RotateCcw, Home, FileText, Printer } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+// Supabase Edge Function URL
+const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
+const BUCKET = 'invoices';
+
+function fmt(n: number) {
+  return '₹' + Number(n || 0).toLocaleString('en-IN');
+}
+
+async function buildPdfBlob(args: any) {
+  const { order, items, addons, payments, customer, outlet, invoiceNumber } = args;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  
+  doc.setFontSize(18); 
+  doc.text('Telugu Food Club', 40, 50);
+  doc.setFontSize(10); 
+  doc.text(outlet?.outlet_name ?? '', 40, 66);
+  doc.text(`${outlet?.address ?? ''} ${outlet?.city ?? ''}`, 40, 80);
+  doc.text(`Phone: ${outlet?.phone ?? ''}`, 40, 94);
+  
+  doc.setFontSize(14); 
+  doc.text('TAX INVOICE', 400, 50);
+  doc.setFontSize(10);
+  doc.text(`Invoice #: ${invoiceNumber}`, 400, 66);
+  doc.text(`Date: ${new Date().toLocaleString()}`, 400, 80);
+  doc.text(`Order #: ${order.order_number || order.id.slice(0, 8)}`, 400, 94);
+
+  doc.setFontSize(11); 
+  doc.text('Bill To', 40, 120);
+  doc.setFontSize(10);
+  doc.text(customer?.full_name || customer?.name || 'Guest', 40, 136);
+  doc.text(customer?.phone || '', 40, 150);
+  doc.text(customer?.email || '', 40, 164);
+
+  const addonByItem = new Map();
+  (addons || []).forEach((a: any) => {
+    const arr = addonByItem.get(a.order_item_id) ?? [];
+    arr.push(a); 
+    addonByItem.set(a.order_item_id, arr);
+  });
+
+  const rows = (items || []).flatMap((it: any) => {
+    const base = [
+      it.item_name_snapshot + (it.variant_name_snapshot ? ` — ${it.variant_name_snapshot}` : ''),
+      String(it.quantity),
+      fmt(it.unit_price_snapshot || it.price || 0),
+      fmt(it.total_price || (it.price * it.quantity) || 0)
+    ];
+    const adds = (addonByItem.get(it.id) ?? []).map((a: any) => [
+      `  + ${a.addon_name_snapshot}`,
+      String(a.quantity),
+      fmt(a.price_snapshot || a.price || 0),
+      fmt((a.price_snapshot || a.price || 0) * (a.quantity || 1))
+    ]);
+    return [base, ...adds];
+  });
+
+  autoTable(doc, {
+    startY: 190,
+    head: [['Item', 'Qty', 'Rate', 'Total']],
+    body: rows,
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [184, 71, 28] },
+  });
+
+  const endY = (doc as any).lastAutoTable.finalY + 20;
+  
+  const lines = [
+    ['Subtotal', fmt(order.subtotal || 0)],
+    ['Tax', fmt(order.tax_amount || 0)],
+    ['Grand Total', fmt(order.grand_total || 0)],
+  ];
+  
+  lines.forEach(([k, v], i) => {
+    doc.setFontSize(i === lines.length - 1 ? 12 : 10);
+    doc.text(k, 380, endY + i * 16);
+    doc.text(v, 540, endY + i * 16, { align: 'right' });
+  });
+
+  const paid = (payments || []).find((p: any) => p.payment_status === 'success');
+  if (paid) {
+    doc.setFontSize(10); 
+    doc.setTextColor(0, 120, 0);
+    doc.text(
+      `PAID via ${paid.payment_gateway}${paid.payment_mode ? ' · ' + paid.payment_mode : ''}${paid.transaction_id ? '  TXN ' + paid.transaction_id : ''}`, 
+      40, 
+      endY + lines.length * 16 + 24
+    );
+    doc.setTextColor(0, 0, 0);
+  }
+
+  doc.setFontSize(9);
+  doc.text('Thank you for your business!', 40, 800);
+  doc.text('This is a system generated invoice.', 40, 814);
+  
+  return doc.output('blob');
+}
 
 export default function PaymentConfirmation() {
   const [searchParams] = useSearchParams();
@@ -14,6 +115,10 @@ export default function PaymentConfirmation() {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [orderDetails, setOrderDetails] = useState<any>(null);
   const [pollingAttempts, setPollingAttempts] = useState(0);
+  const [isPolling, setIsPolling] = useState(false);
+  const [invoiceData, setInvoiceData] = useState<any>(null);
+  const [merchantTransactionId, setMerchantTransactionId] = useState<string | null>(null);
+  const [phonePeResponse, setPhonePeResponse] = useState<any>(null);
 
   useEffect(() => {
     const orderIdParam = searchParams.get('orderId');
@@ -26,51 +131,21 @@ export default function PaymentConfirmation() {
       toast.error('No order ID found');
     }
 
-    // Cleanup function
     return () => {
-      // Clear any intervals if component unmounts
+      // Cleanup any intervals
     };
   }, [searchParams]);
 
   const verifyPayment = async (orderId: string) => {
     try {
-      // Check order status in database
+      // First check order in database
       const { data: order, error } = await supabaseAdmin
         .from('orders')
         .select(`
-          id,
-          order_number,
-          order_status,
-          payment_status,
-          grand_total,
-          subtotal,
-          tax_amount,
-          walk_in_customer_name,
-          walk_in_customer_phone,
-          table_number,
-          created_at,
-          order_items (
-            id,
-            item_name_snapshot,
-            variant_name_snapshot,
-            quantity,
-            unit_price_snapshot,
-            total_price
-          ),
-          payments (
-            id,
-            payment_gateway,
-            payment_mode,
-            payment_status,
-            transaction_id,
-            amount
-          ),
-          invoices (
-            id,
-            invoice_number,
-            invoice_url,
-            invoice_amount
-          )
+          *,
+          order_items (*),
+          payments (*),
+          invoices (*)
         `)
         .eq('id', orderId)
         .single();
@@ -79,17 +154,36 @@ export default function PaymentConfirmation() {
 
       setOrderDetails(order);
 
-      if (order.payment_status === 'paid') {
+      // Get merchant transaction ID from payments
+      if (order.payments && order.payments.length > 0) {
+        const payment = order.payments[0];
+        setMerchantTransactionId(payment.merchant_transaction_id);
+      }
+
+      // Check if already paid
+      const isPaid = order.payment_status === 'paid' || 
+                     order.payment_status === 'success' ||
+                     order.order_status === 'received' ||
+                     order.order_status === 'completed';
+
+      const isFailed = order.payment_status === 'failed' || 
+                       order.order_status === 'payment_failed';
+
+      if (isPaid) {
         setStatus('success');
+        if (order.invoices && order.invoices.length > 0) {
+          setInvoiceData(order.invoices[0]);
+        } else {
+          // Generate invoice if not exists
+          await generateInvoice(orderId);
+        }
         toast.success('Payment confirmed!');
-        generateInvoice(orderId);
-      } else if (order.payment_status === 'failed') {
+      } else if (isFailed) {
         setStatus('failed');
         toast.error('Payment failed');
       } else {
-        setStatus('pending');
-        // Start polling for status
-        pollPaymentStatus(orderId);
+        // Call PhonePe Edge Function to check status
+        await checkPhonePeStatus(orderId);
       }
     } catch (error) {
       console.error('Error verifying payment:', error);
@@ -100,30 +194,231 @@ export default function PaymentConfirmation() {
     }
   };
 
+  const checkPhonePeStatus = async (orderId: string) => {
+    try {
+      // Get merchant transaction ID from database
+      const { data: payment } = await supabaseAdmin
+        .from('payments')
+        .select('merchant_transaction_id')
+        .eq('order_id', orderId)
+        .single();
+
+      if (!payment?.merchant_transaction_id) {
+        setStatus('pending');
+        toast.warning('No transaction found. Please check manually.');
+        return;
+      }
+
+      const merchantId = payment.merchant_transaction_id;
+      setMerchantTransactionId(merchantId);
+
+      // Call Supabase Edge Function to check status
+      const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
+        action: 'status',
+        merchantOrderId: merchantId
+      });
+
+      if (response.data) {
+        setPhonePeResponse(response.data);
+        const result = response.data;
+        
+        const isSuccess = 
+          result.state === 'COMPLETED' || 
+          result.status === 'SUCCESS' ||
+          result.paymentState === 'COMPLETED' ||
+          result.success === true;
+
+        const isFailed = 
+          result.state === 'FAILED' || 
+          result.status === 'FAILED' ||
+          result.paymentState === 'FAILED' ||
+          result.success === false;
+
+        if (isSuccess) {
+          // Update order status in database
+          await updateOrderStatus(orderId, 'success', merchantId);
+          setStatus('success');
+          await generateInvoice(orderId);
+          toast.success('Payment confirmed!');
+        } else if (isFailed) {
+          await updateOrderStatus(orderId, 'failed', merchantId);
+          setStatus('failed');
+          toast.error('Payment failed');
+        } else {
+          // Still pending - start polling
+          setStatus('pending');
+          startPolling(orderId, merchantId);
+        }
+      } else {
+        setStatus('pending');
+        startPolling(orderId, merchantId);
+      }
+    } catch (error: any) {
+      console.error('Error checking PhonePe status:', error);
+      
+      // If Edge Function fails, check database status
+      const { data: order } = await supabaseAdmin
+        .from('orders')
+        .select('payment_status, order_status')
+        .eq('id', orderId)
+        .single();
+
+      if (order?.payment_status === 'paid' || order?.order_status === 'received') {
+        setStatus('success');
+        await generateInvoice(orderId);
+      } else if (order?.payment_status === 'failed' || order?.order_status === 'payment_failed') {
+        setStatus('failed');
+      } else {
+        setStatus('pending');
+        toast.warning('Unable to verify payment status. Please check manually.');
+      }
+    }
+  };
+
+  const updateOrderStatus = async (orderId: string, status: string, merchantId: string) => {
+    try {
+      const isSuccess = status === 'success';
+      
+      // Update payments table
+      await supabaseAdmin
+        .from('payments')
+        .update({
+          payment_status: isSuccess ? 'success' : 'failed',
+          paid_at: isSuccess ? new Date().toISOString() : null,
+        })
+        .eq('merchant_transaction_id', merchantId);
+
+      // Update orders table
+      await supabaseAdmin
+        .from('orders')
+        .update({
+          payment_status: isSuccess ? 'paid' : 'failed',
+          order_status: isSuccess ? 'received' : 'payment_failed',
+        })
+        .eq('id', orderId);
+
+      // Add status history
+      await supabaseAdmin
+        .from('order_status_history')
+        .insert({
+          order_id: orderId,
+          old_status: 'pending_payment',
+          new_status: isSuccess ? 'received' : 'payment_failed',
+          remarks: isSuccess ? 'Payment confirmed via PhonePe' : 'Payment failed',
+          changed_by: 'system',
+          changed_by_role: 'system',
+        });
+
+      // Refresh order details
+      const { data: updatedOrder } = await supabaseAdmin
+        .from('orders')
+        .select(`
+          *,
+          order_items (*),
+          payments (*),
+          invoices (*)
+        `)
+        .eq('id', orderId)
+        .single();
+
+      if (updatedOrder) {
+        setOrderDetails(updatedOrder);
+      }
+    } catch (error) {
+      console.error('Error updating order status:', error);
+    }
+  };
+
   const generateInvoice = async (orderId: string) => {
     try {
       // Check if invoice already exists
       const { data: existingInvoice } = await supabaseAdmin
         .from('invoices')
-        .select('id, invoice_number, invoice_url')
+        .select('*')
         .eq('order_id', orderId)
         .single();
 
       if (existingInvoice) {
-        setOrderDetails((prev: any) => ({
-          ...prev,
-          invoices: [existingInvoice]
-        }));
+        setInvoiceData(existingInvoice);
         return;
       }
 
-      // Call your invoice generation function
-      // This should be imported from your admin-payment-test file
-      // For now, we'll just fetch the updated order details
+      // Fetch order details for invoice
+      const { data: order } = await supabaseAdmin
+        .from('orders')
+        .select(`
+          id, order_number, created_at, subtotal, tax_amount, grand_total, 
+          walk_in_customer_name, walk_in_customer_phone, order_type, table_number, customer_notes
+        `)
+        .eq('id', orderId)
+        .single();
+
+      const { data: items } = await supabaseAdmin
+        .from('order_items')
+        .select('id, item_name_snapshot, variant_name_snapshot, quantity, unit_price_snapshot, total_price')
+        .eq('order_id', orderId);
+
+      const { data: payments } = await supabaseAdmin
+        .from('payments')
+        .select('payment_gateway, payment_mode, payment_status, transaction_id')
+        .eq('order_id', orderId);
+
+      const { data: outlet } = await supabaseAdmin
+        .from('outlets')
+        .select('outlet_name, address, city, state, phone, outlet_code')
+        .eq('id', order.outlet_id)
+        .single();
+
+      const invoiceNumber = `INV-${order.order_number || orderId.slice(0, 8)}-${Date.now().toString().slice(-6)}`;
+      const customer = {
+        full_name: order.walk_in_customer_name || 'Guest',
+        phone: order.walk_in_customer_phone || '',
+        email: ''
+      };
+
+      const blob = await buildPdfBlob({ 
+        order, 
+        items: items || [], 
+        addons: [], 
+        payments: payments || [], 
+        customer, 
+        outlet, 
+        invoiceNumber 
+      });
+      
+      const path = `${orderId}/${invoiceNumber}.pdf`;
+      await supabase.storage.from(BUCKET).upload(path, blob, { 
+        contentType: "application/pdf", 
+        upsert: true 
+      });
+      
+      const { data: pubData } = supabase.storage.from(BUCKET).getPublicUrl(path);
+
+      const { data: invoiceRecord } = await supabaseAdmin
+        .from('invoices')
+        .insert({
+          order_id: orderId,
+          invoice_number: invoiceNumber,
+          invoice_url: pubData.publicUrl,
+          invoice_amount: Number(order.grand_total),
+          tax_amount: Number(order.tax_amount),
+          generated_by: 'system',
+          is_void: false,
+          generated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      setInvoiceData(invoiceRecord);
+      toast.success('Invoice generated successfully!');
+
+      // Refresh order details with invoice
       const { data: updatedOrder } = await supabaseAdmin
         .from('orders')
         .select(`
           *,
+          order_items (*),
+          payments (*),
           invoices (*)
         `)
         .eq('id', orderId)
@@ -134,67 +429,96 @@ export default function PaymentConfirmation() {
       }
     } catch (error) {
       console.error('Error generating invoice:', error);
+      toast.error('Failed to generate invoice');
     }
   };
 
-  const pollPaymentStatus = async (orderId: string) => {
+  const startPolling = (orderId: string, merchantId: string) => {
     let attempts = 0;
-    const maxAttempts = 20; // 20 * 3 seconds = 60 seconds max
+    const maxAttempts = 20;
+    setIsPolling(true);
 
     const interval = setInterval(async () => {
       attempts++;
       setPollingAttempts(attempts);
 
       try {
-        const { data: order, error } = await supabaseAdmin
+        // Check database first
+        const { data: order } = await supabaseAdmin
           .from('orders')
-          .select('payment_status, order_status, grand_total, subtotal')
+          .select('payment_status, order_status')
           .eq('id', orderId)
           .single();
 
-        if (error) throw error;
-
-        if (order.payment_status === 'paid') {
+        if (order?.payment_status === 'paid' || order?.order_status === 'received') {
           setStatus('success');
-          setOrderDetails((prev: any) => ({ ...prev, ...order }));
+          setIsPolling(false);
+          await generateInvoice(orderId);
           toast.success('Payment confirmed!');
-          
-          // Fetch full order details
-          const { data: fullOrder } = await supabaseAdmin
-            .from('orders')
-            .select(`
-              *,
-              order_items (*),
-              payments (*),
-              invoices (*)
-            `)
-            .eq('id', orderId)
-            .single();
-          
-          if (fullOrder) {
-            setOrderDetails(fullOrder);
-          }
-          
           clearInterval(interval);
-        } else if (order.payment_status === 'failed') {
+          return;
+        }
+
+        if (order?.payment_status === 'failed' || order?.order_status === 'payment_failed') {
           setStatus('failed');
+          setIsPolling(false);
           toast.error('Payment failed');
           clearInterval(interval);
-        } else if (attempts >= maxAttempts) {
-          setStatus('pending');
-          toast.warning('Payment still processing. Please check order status manually.');
+          return;
+        }
+
+        // Call Edge Function for status
+        const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
+          action: 'status',
+          merchantOrderId: merchantId
+        });
+
+        if (response.data) {
+          setPhonePeResponse(response.data);
+          const result = response.data;
+          
+          const isSuccess = 
+            result.state === 'COMPLETED' || 
+            result.status === 'SUCCESS' ||
+            result.paymentState === 'COMPLETED' ||
+            result.success === true;
+
+          const isFailed = 
+            result.state === 'FAILED' || 
+            result.status === 'FAILED' ||
+            result.paymentState === 'FAILED' ||
+            result.success === false;
+
+          if (isSuccess) {
+            await updateOrderStatus(orderId, 'success', merchantId);
+            setStatus('success');
+            setIsPolling(false);
+            await generateInvoice(orderId);
+            toast.success('Payment confirmed!');
+            clearInterval(interval);
+          } else if (isFailed) {
+            await updateOrderStatus(orderId, 'failed', merchantId);
+            setStatus('failed');
+            setIsPolling(false);
+            toast.error('Payment failed');
+            clearInterval(interval);
+          }
+        }
+
+        if (attempts >= maxAttempts) {
+          setIsPolling(false);
+          toast.warning('Payment still processing. Please check manually.');
           clearInterval(interval);
         }
       } catch (error) {
-        console.error('Error polling payment status:', error);
+        console.error('Polling error:', error);
         if (attempts >= maxAttempts) {
+          setIsPolling(false);
           clearInterval(interval);
-          toast.error('Could not verify payment status. Please check manually.');
         }
       }
     }, 3000);
 
-    // Cleanup interval on component unmount
     return () => clearInterval(interval);
   };
 
@@ -210,6 +534,18 @@ export default function PaymentConfirmation() {
 
   const handleGoHome = () => {
     navigate('/admin/dashboard');
+  };
+
+  const handlePrintInvoice = () => {
+    if (orderId) {
+      navigate(`/admin/invoice/${orderId}?format=thermal&print=1`);
+    }
+  };
+
+  const handleViewInvoice = () => {
+    if (invoiceData?.invoice_url) {
+      window.open(invoiceData.invoice_url, '_blank');
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -260,37 +596,45 @@ export default function PaymentConfirmation() {
                     <span className="font-semibold">{orderDetails.walk_in_customer_name}</span>
                   </div>
                 )}
-                {orderDetails.invoices && orderDetails.invoices.length > 0 && (
+                {invoiceData && (
                   <div className="mt-2 border-t border-green-200 pt-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Invoice</span>
-                      <a 
-                        href={orderDetails.invoices[0].invoice_url} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="font-semibold text-blue-600 hover:underline"
-                      >
-                        {orderDetails.invoices[0].invoice_number}
-                      </a>
+                      <span className="font-semibold text-blue-600">{invoiceData.invoice_number}</span>
                     </div>
+                  </div>
+                )}
+                {phonePeResponse && (
+                  <div className="mt-2 border-t border-green-200 pt-2">
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">PhonePe Response Details</summary>
+                      <pre className="mt-1 overflow-auto rounded bg-gray-50 p-2 text-xs">
+                        {JSON.stringify(phonePeResponse, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
               </div>
             )}
 
             <div className="mt-6 space-y-3">
-              <Button 
-                onClick={handleViewOrder} 
-                className="w-full bg-green-600 text-white hover:bg-green-700"
-              >
+              {invoiceData && (
+                <>
+                  <Button onClick={handlePrintInvoice} className="w-full bg-maroon text-cream hover:bg-maroon/90">
+                    <Printer className="mr-2 h-4 w-4" />
+                    Print Invoice
+                  </Button>
+                  <Button onClick={handleViewInvoice} variant="outline" className="w-full">
+                    <FileText className="mr-2 h-4 w-4" />
+                    View Invoice
+                  </Button>
+                </>
+              )}
+              <Button onClick={handleViewOrder} className="w-full bg-green-600 text-white hover:bg-green-700">
                 <Eye className="mr-2 h-4 w-4" />
                 View Order Status
               </Button>
-              <Button 
-                onClick={handleGoHome} 
-                variant="outline" 
-                className="w-full"
-              >
+              <Button onClick={handleGoHome} variant="outline" className="w-full">
                 <Home className="mr-2 h-4 w-4" />
                 Go to Dashboard
               </Button>
@@ -311,16 +655,24 @@ export default function PaymentConfirmation() {
             <h2 className="mt-4 text-2xl font-bold text-red-700">Payment Failed</h2>
             <p className="mt-2 text-sm text-red-600">Your payment could not be processed</p>
             
-            {orderId && (
+            {orderId && orderDetails && (
               <div className="mt-4 rounded-lg bg-white p-4 text-left shadow-sm">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Order #</span>
-                  <span className="font-semibold">{orderDetails?.order_number || orderId.slice(0, 8)}</span>
+                  <span className="font-semibold">{orderDetails.order_number || orderId.slice(0, 8)}</span>
                 </div>
-                {orderDetails?.grand_total && (
-                  <div className="mt-1 flex justify-between text-sm">
-                    <span className="text-muted-foreground">Amount</span>
-                    <span className="font-semibold text-maroon">{formatCurrency(orderDetails.grand_total)}</span>
+                <div className="mt-1 flex justify-between text-sm">
+                  <span className="text-muted-foreground">Amount</span>
+                  <span className="font-semibold text-maroon">{formatCurrency(orderDetails.grand_total)}</span>
+                </div>
+                {phonePeResponse && (
+                  <div className="mt-2 border-t border-red-200 pt-2">
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">PhonePe Response Details</summary>
+                      <pre className="mt-1 overflow-auto rounded bg-gray-50 p-2 text-xs">
+                        {JSON.stringify(phonePeResponse, null, 2)}
+                      </pre>
+                    </details>
                   </div>
                 )}
               </div>
@@ -354,15 +706,23 @@ export default function PaymentConfirmation() {
           <div className="mt-4">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Checking status...</span>
-              <span className="font-semibold text-amber-600">{pollingAttempts}/20 attempts</span>
+              <span className="font-semibold text-amber-600">
+                {isPolling ? `${pollingAttempts}/20 attempts` : 'Waiting...'}
+              </span>
             </div>
             <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-amber-200">
               <div 
                 className="h-full rounded-full bg-amber-500 transition-all duration-300"
-                style={{ width: `${(pollingAttempts / 20) * 100}%` }}
-              ></div>
+                style={{ width: `${isPolling ? (pollingAttempts / 20) * 100 : 0}%` }}
+              />
             </div>
           </div>
+
+          {merchantTransactionId && (
+            <div className="mt-4 text-xs text-muted-foreground">
+              Transaction ID: {merchantTransactionId}
+            </div>
+          )}
 
           {orderId && (
             <div className="mt-6 space-y-3">
