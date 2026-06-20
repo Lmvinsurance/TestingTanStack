@@ -22,26 +22,35 @@ async function buildPdfBlob(args: any) {
   const { order, items, addons, payments, customer, outlet, invoiceNumber } = args;
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   
-  doc.setFontSize(18); 
+  doc.setFontSize(20);
+  doc.setTextColor(184, 71, 28);
   doc.text('Telugu Food Club', 40, 50);
-  doc.setFontSize(10); 
-  doc.text(outlet?.outlet_name ?? '', 40, 66);
-  doc.text(`${outlet?.address ?? ''} ${outlet?.city ?? ''}`, 40, 80);
-  doc.text(`Phone: ${outlet?.phone ?? ''}`, 40, 94);
   
-  doc.setFontSize(14); 
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  doc.text(outlet?.outlet_name ?? '', 40, 68);
+  doc.text(`${outlet?.address ?? ''} ${outlet?.city ?? ''}`, 40, 82);
+  doc.text(`Phone: ${outlet?.phone ?? ''}`, 40, 96);
+  
+  doc.setFontSize(16);
+  doc.setTextColor(0, 0, 0);
   doc.text('TAX INVOICE', 400, 50);
-  doc.setFontSize(10);
-  doc.text(`Invoice #: ${invoiceNumber}`, 400, 66);
-  doc.text(`Date: ${new Date().toLocaleString()}`, 400, 80);
-  doc.text(`Order #: ${order.order_number || order.id.slice(0, 8)}`, 400, 94);
+  
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(`Invoice #: ${invoiceNumber}`, 400, 68);
+  doc.text(`Date: ${new Date().toLocaleString()}`, 400, 82);
+  doc.text(`Order #: ${order.order_number || order.id.slice(0, 8)}`, 400, 96);
 
-  doc.setFontSize(11); 
-  doc.text('Bill To', 40, 120);
+  doc.setFontSize(11);
+  doc.setTextColor(0, 0, 0);
+  doc.text('Bill To', 40, 125);
   doc.setFontSize(10);
-  doc.text(customer?.full_name || customer?.name || 'Guest', 40, 136);
-  doc.text(customer?.phone || '', 40, 150);
-  doc.text(customer?.email || '', 40, 164);
+  doc.text(customer?.full_name || customer?.name || 'Guest', 40, 141);
+  doc.text(customer?.phone || '', 40, 155);
+  if (customer?.email) {
+    doc.text(customer?.email || '', 40, 169);
+  }
 
   const addonByItem = new Map();
   (addons || []).forEach((a: any) => {
@@ -70,39 +79,66 @@ async function buildPdfBlob(args: any) {
     startY: 190,
     head: [['Item', 'Qty', 'Rate', 'Total']],
     body: rows,
-    styles: { fontSize: 9 },
-    headStyles: { fillColor: [184, 71, 28] },
+    styles: { 
+      fontSize: 9,
+      cellPadding: 4,
+    },
+    headStyles: { 
+      fillColor: [184, 71, 28],
+      textColor: [255, 255, 255],
+      fontSize: 10,
+      fontStyle: 'bold',
+    },
+    columnStyles: {
+      0: { cellWidth: 'auto' },
+      1: { cellWidth: 40, halign: 'center' },
+      2: { cellWidth: 60, halign: 'right' },
+      3: { cellWidth: 60, halign: 'right' },
+    },
+    tableWidth: 'auto',
+    margin: { left: 40, right: 40 },
   });
 
   const endY = (doc as any).lastAutoTable.finalY + 20;
   
-  const lines = [
+  const totalLines = [
     ['Subtotal', fmt(order.subtotal || 0)],
     ['Tax', fmt(order.tax_amount || 0)],
-    ['Grand Total', fmt(order.grand_total || 0)],
   ];
   
-  lines.forEach(([k, v], i) => {
-    doc.setFontSize(i === lines.length - 1 ? 12 : 10);
-    doc.text(k, 380, endY + i * 16);
-    doc.text(v, 540, endY + i * 16, { align: 'right' });
+  totalLines.forEach(([label, value], i) => {
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text(label, 440, endY + i * 18);
+    doc.text(value, 550, endY + i * 18, { align: 'right' });
   });
+
+  const grandY = endY + totalLines.length * 18 + 8;
+  doc.setFontSize(12);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Grand Total', 440, grandY);
+  doc.text(fmt(order.grand_total || 0), 550, grandY, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
 
   const paid = (payments || []).find((p: any) => p.payment_status === 'success' || p.payment_status === 'paid');
   if (paid) {
-    doc.setFontSize(10); 
+    const paidY = grandY + 24;
+    doc.setFontSize(9);
     doc.setTextColor(0, 120, 0);
-    doc.text(
-      `PAID via ${paid.payment_gateway}${paid.payment_mode ? ' · ' + paid.payment_mode : ''}${paid.transaction_id ? '  TXN ' + paid.transaction_id : ''}`, 
-      40, 
-      endY + lines.length * 16 + 24
-    );
+    const paymentText = `PAID via ${paid.payment_gateway?.toUpperCase() || 'PHONEPE'}${paid.payment_mode ? ' · ' + paid.payment_mode.toUpperCase() : ''}${paid.transaction_id ? '  TXN: ' + paid.transaction_id : ''}`;
+    doc.text(paymentText, 40, paidY);
     doc.setTextColor(0, 0, 0);
   }
 
-  doc.setFontSize(9);
-  doc.text('Thank you for your business!', 40, 800);
-  doc.text('This is a system generated invoice.', 40, 814);
+  doc.setFontSize(8);
+  doc.setTextColor(150, 150, 150);
+  doc.text('Thank you for your business!', 40, 780);
+  doc.text('This is a system generated invoice.', 40, 794);
+
+  doc.setDrawColor(200, 200, 200);
+  doc.setLineWidth(0.5);
+  doc.rect(20, 20, 555, 790);
   
   return doc.output('blob');
 }
@@ -172,7 +208,7 @@ export default function PaymentConfirmation() {
         // Step 3: Save PhonePe response to database
         await savePhonePeResponse(orderId, paymentId, result);
         
-        // Step 4: Check if payment is successful based on PhonePe response
+        // Step 4: Check if payment is successful
         const isSuccess = 
           result.state === 'COMPLETED' || 
           result.status === 'SUCCESS' ||
@@ -238,7 +274,6 @@ export default function PaymentConfirmation() {
     }
   };
 
-  // Save PhonePe response to database
   const savePhonePeResponse = async (orderId: string, paymentId: string, phonePeResult: any) => {
     try {
       await supabaseAdmin
@@ -259,6 +294,8 @@ export default function PaymentConfirmation() {
   const updateOrderStatus = async (orderId: string, status: string, merchantId: string, phonePeResult: any) => {
     try {
       const isSuccess = status === 'success';
+      
+      console.log('Updating order status to:', isSuccess ? 'success' : 'failed');
       
       // Get payment ID
       const { data: payment } = await supabaseAdmin
@@ -285,10 +322,17 @@ export default function PaymentConfirmation() {
           payment_status: isSuccess ? 'paid' : 'failed',
           order_status: isSuccess ? 'received' : 'payment_failed',
           last_updated_by: 'system',
+          updated_at: new Date().toISOString(),
         })
         .eq('id', orderId);
 
-      // ✅ Save to order_status_history table
+      console.log('Order updated successfully:', {
+        orderId,
+        payment_status: isSuccess ? 'paid' : 'failed',
+        order_status: isSuccess ? 'received' : 'payment_failed'
+      });
+
+      // ✅ Add status history with all fields including ip_address
       await supabaseAdmin
         .from('order_status_history')
         .insert({
@@ -298,12 +342,15 @@ export default function PaymentConfirmation() {
           remarks: isSuccess ? 'Payment confirmed via PhonePe' : 'Payment failed',
           changed_by: 'system',
           changed_by_role: 'system',
+          ip_address: null, // You can get client IP if needed
+          created_at: new Date().toISOString()
         });
 
       toast.success(isSuccess ? 'Payment status updated successfully!' : 'Payment status updated.');
     } catch (error) {
       console.error('Error updating order status:', error);
-      toast.error('Failed to update payment status');
+      toast.error('Failed to update payment status: ' + (error as Error).message);
+      throw error;
     }
   };
 
@@ -386,7 +433,7 @@ export default function PaymentConfirmation() {
         .from(BUCKET)
         .getPublicUrl(path);
 
-      // ✅ Save invoice record to database
+      // Save invoice record to database
       const { data: invoiceRecord, error: invoiceError } = await supabaseAdmin
         .from('invoices')
         .insert({
@@ -578,6 +625,10 @@ export default function PaymentConfirmation() {
                 <div className="mt-1 flex justify-between text-sm">
                   <span className="text-muted-foreground">Amount</span>
                   <span className="font-semibold text-maroon">{formatCurrency(orderDetails.grand_total)}</span>
+                </div>
+                <div className="mt-1 flex justify-between text-sm">
+                  <span className="text-muted-foreground">Status</span>
+                  <span className="font-semibold text-green-600">{orderDetails.order_status}</span>
                 </div>
                 {orderDetails.walk_in_customer_name && (
                   <div className="mt-1 flex justify-between text-sm">
