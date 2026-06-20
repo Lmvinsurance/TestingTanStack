@@ -13,7 +13,7 @@ import { AdminHeader, AdminPage } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2, FileText, Eye } from 'lucide-react';
+import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2, FileText, Eye, XCircle, RefreshCw, RotateCcw } from 'lucide-react';
 import {
   listWalkinOutlets,
   listWalkinMenu,
@@ -31,26 +31,35 @@ async function buildPdfBlob(args: any) {
   const { order, items, addons, payments, customer, outlet, invoiceNumber } = args;
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   
-  doc.setFontSize(18); 
+  doc.setFontSize(20);
+  doc.setTextColor(184, 71, 28);
   doc.text('Telugu Food Club', 40, 50);
-  doc.setFontSize(10); 
-  doc.text(outlet?.outlet_name ?? '', 40, 66);
-  doc.text(`${outlet?.address ?? ''} ${outlet?.city ?? ''}`, 40, 80);
-  doc.text(`Phone: ${outlet?.phone ?? ''}`, 40, 94);
   
-  doc.setFontSize(14); 
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  doc.text(outlet?.outlet_name ?? '', 40, 68);
+  doc.text(`${outlet?.address ?? ''} ${outlet?.city ?? ''}`, 40, 82);
+  doc.text(`Phone: ${outlet?.phone ?? ''}`, 40, 96);
+  
+  doc.setFontSize(16);
+  doc.setTextColor(0, 0, 0);
   doc.text('TAX INVOICE', 400, 50);
-  doc.setFontSize(10);
-  doc.text(`Invoice #: ${invoiceNumber}`, 400, 66);
-  doc.text(`Date: ${new Date().toLocaleString()}`, 400, 80);
-  doc.text(`Order #: ${order.order_number || order.id.slice(0, 8)}`, 400, 94);
+  
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(`Invoice #: ${invoiceNumber}`, 400, 68);
+  doc.text(`Date: ${new Date().toLocaleString()}`, 400, 82);
+  doc.text(`Order #: ${order.order_number || order.id.slice(0, 8)}`, 400, 96);
 
-  doc.setFontSize(11); 
-  doc.text('Bill To', 40, 120);
+  doc.setFontSize(11);
+  doc.setTextColor(0, 0, 0);
+  doc.text('Bill To', 40, 125);
   doc.setFontSize(10);
-  doc.text(customer?.full_name || customer?.name || 'Guest', 40, 136);
-  doc.text(customer?.phone || '', 40, 150);
-  doc.text(customer?.email || '', 40, 164);
+  doc.text(customer?.full_name || customer?.name || 'Guest', 40, 141);
+  doc.text(customer?.phone || '', 40, 155);
+  if (customer?.email) {
+    doc.text(customer?.email || '', 40, 169);
+  }
 
   const addonByItem = new Map();
   (addons || []).forEach((a: any) => {
@@ -79,39 +88,66 @@ async function buildPdfBlob(args: any) {
     startY: 190,
     head: [['Item', 'Qty', 'Rate', 'Total']],
     body: rows,
-    styles: { fontSize: 9 },
-    headStyles: { fillColor: [184, 71, 28] },
+    styles: { 
+      fontSize: 9,
+      cellPadding: 4,
+    },
+    headStyles: { 
+      fillColor: [184, 71, 28],
+      textColor: [255, 255, 255],
+      fontSize: 10,
+      fontStyle: 'bold',
+    },
+    columnStyles: {
+      0: { cellWidth: 'auto' },
+      1: { cellWidth: 40, halign: 'center' },
+      2: { cellWidth: 60, halign: 'right' },
+      3: { cellWidth: 60, halign: 'right' },
+    },
+    tableWidth: 'auto',
+    margin: { left: 40, right: 40 },
   });
 
   const endY = (doc as any).lastAutoTable.finalY + 20;
   
-  const lines = [
+  const totalLines = [
     ['Subtotal', fmt(order.subtotal || 0)],
     ['Tax', fmt(order.tax_amount || 0)],
-    ['Grand Total', fmt(order.grand_total || 0)],
   ];
   
-  lines.forEach(([k, v], i) => {
-    doc.setFontSize(i === lines.length - 1 ? 12 : 10);
-    doc.text(k, 380, endY + i * 16);
-    doc.text(v, 540, endY + i * 16, { align: 'right' });
+  totalLines.forEach(([label, value], i) => {
+    doc.setFontSize(10);
+    doc.setTextColor(80, 80, 80);
+    doc.text(label, 440, endY + i * 18);
+    doc.text(value, 550, endY + i * 18, { align: 'right' });
   });
 
-  const paid = (payments || []).find((p: any) => p.payment_status === 'success');
+  const grandY = endY + totalLines.length * 18 + 8;
+  doc.setFontSize(12);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Grand Total', 440, grandY);
+  doc.text(fmt(order.grand_total || 0), 550, grandY, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+
+  const paid = (payments || []).find((p: any) => p.payment_status === 'success' || p.payment_status === 'paid');
   if (paid) {
-    doc.setFontSize(10); 
+    const paidY = grandY + 24;
+    doc.setFontSize(9);
     doc.setTextColor(0, 120, 0);
-    doc.text(
-      `PAID via ${paid.payment_gateway}${paid.payment_mode ? ' · ' + paid.payment_mode : ''}${paid.transaction_id ? '  TXN ' + paid.transaction_id : ''}`, 
-      40, 
-      endY + lines.length * 16 + 24
-    );
+    const paymentText = `PAID via ${paid.payment_gateway?.toUpperCase() || 'PHONEPE'}${paid.payment_mode ? ' · ' + paid.payment_mode.toUpperCase() : ''}${paid.transaction_id ? '  TXN: ' + paid.transaction_id : ''}`;
+    doc.text(paymentText, 40, paidY);
     doc.setTextColor(0, 0, 0);
   }
 
-  doc.setFontSize(9);
-  doc.text('Thank you for your business!', 40, 800);
-  doc.text('This is a system generated invoice.', 40, 814);
+  doc.setFontSize(8);
+  doc.setTextColor(150, 150, 150);
+  doc.text('Thank you for your business!', 40, 780);
+  doc.text('This is a system generated invoice.', 40, 794);
+
+  doc.setDrawColor(200, 200, 200);
+  doc.setLineWidth(0.5);
+  doc.rect(20, 20, 555, 790);
   
   return doc.output('blob');
 }
@@ -199,6 +235,10 @@ export default function AdminPaymentTest() {
   const [showPaymentChannel, setShowPaymentChannel] = useState(false);
   const [paymentChannelUrl, setPaymentChannelUrl] = useState<string | null>(null);
   const [orderDetails, setOrderDetails] = useState<any>(null);
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollingStopped, setPollingStopped] = useState(false);
+  const [canCheckManually, setCanCheckManually] = useState(false);
+  const [paymentCancelled, setPaymentCancelled] = useState(false);
 
   const pollIntervalRef = useRef<any>(null);
   const timeoutRef = useRef<any>(null);
@@ -255,6 +295,11 @@ export default function AdminPaymentTest() {
     setShowPaymentChannel(false);
     setShowRetryButton(false);
     setOrderDetails(null);
+    setIsPolling(false);
+    setPollingStopped(false);
+    setCanCheckManually(false);
+    setVerificationAttempts(0);
+    setPaymentCancelled(false);
   }
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
@@ -496,6 +541,85 @@ export default function AdminPaymentTest() {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
+    setIsPolling(false);
+    setPollingStopped(true);
+  };
+
+  // Cancel payment - stops polling and cancels the payment
+  const cancelPayment = async () => {
+    if (!currentOrderId) {
+      toast.error('No active payment to cancel');
+      return;
+    }
+
+    // Show confirmation dialog
+    if (!window.confirm('Are you sure you want to cancel this payment?')) {
+      return;
+    }
+
+    try {
+      setPaymentCancelled(true);
+      stopPolling();
+      setLoading(false);
+      setIsPolling(false);
+      setShowPaymentChannel(false);
+      setCanCheckManually(false);
+      
+      // Close PhonePe window if open
+      if (phonePeWindow && !phonePeWindow.closed) {
+        phonePeWindow.close();
+        setPhonePeWindow(null);
+      }
+
+      // Update order status to cancelled
+      await supabaseAdmin
+        .from('orders')
+        .update({
+          order_status: 'cancelled',
+          payment_status: 'failed',
+          last_updated_by: adminId,
+        })
+        .eq('id', currentOrderId);
+
+      // Update payment status
+      await supabaseAdmin
+        .from('payments')
+        .update({
+          payment_status: 'cancelled',
+        })
+        .eq('order_id', currentOrderId);
+
+      // Add status history
+      await supabaseAdmin
+        .from('order_status_history')
+        .insert({
+          order_id: currentOrderId,
+          old_status: 'pending_payment',
+          new_status: 'cancelled',
+          remarks: 'Payment cancelled by user',
+          changed_by: adminId,
+          changed_by_role: 'admin',
+        });
+
+      toast.success('Payment cancelled successfully');
+      
+      // Reset the payment state after a moment
+      setTimeout(() => {
+        setPaymentCancelled(false);
+        setCurrentOrderId(null);
+        setShowPaymentChannel(false);
+        setPaymentConfirmed(false);
+        setShowRetryButton(false);
+        setCanCheckManually(false);
+        setPollingStopped(false);
+        setVerificationAttempts(0);
+        resetCart();
+      }, 2000);
+
+    } catch (error) {
+      console.error('Error cancelling payment:', error);
+      toast.error('Failed to cancel payment');
+    }
   };
 
   const verifyPhonePePayment = async (merchantTransactionId: string, isManual = false) => {
@@ -513,6 +637,7 @@ export default function AdminPaymentTest() {
           setVerifyingPayment(false);
           stopPolling();
           setShowPaymentChannel(false);
+          setCanCheckManually(false);
           
           await fetchOrderDetails(currentOrderId);
           
@@ -543,6 +668,7 @@ export default function AdminPaymentTest() {
             setPaymentConfirmed(true);
             setVerifyingPayment(false);
             setShowPaymentChannel(false);
+            setCanCheckManually(false);
             toast.success(`Payment successful!`);
             
             if (currentOrderId) {
@@ -557,6 +683,7 @@ export default function AdminPaymentTest() {
           } else if (result.state === 'FAILED' || result.status === 'FAILED' || result.paymentState === 'FAILED') {
             stopPolling();
             setVerifyingPayment(false);
+            setCanCheckManually(false);
             toast.error('Payment failed.');
             setShowRetryButton(true);
             return { success: false, status: 'failed' };
@@ -576,6 +703,7 @@ export default function AdminPaymentTest() {
             setVerifyingPayment(false);
             stopPolling();
             setShowPaymentChannel(false);
+            setCanCheckManually(false);
             
             await fetchOrderDetails(currentOrderId);
             
@@ -592,6 +720,70 @@ export default function AdminPaymentTest() {
     }
   };
 
+  // Manual check payment status
+  const handleManualCheck = async () => {
+    if (!currentOrderId) {
+      toast.error('No active order found');
+      return;
+    }
+
+    setCanCheckManually(false);
+    setVerifyingPayment(true);
+    
+    try {
+      const { data: payment } = await supabaseAdmin
+        .from("payments")
+        .select("merchant_transaction_id")
+        .eq("order_id", currentOrderId)
+        .single();
+      
+      const merchantTransactionId = payment?.merchant_transaction_id;
+      if (!merchantTransactionId) {
+        toast.error('No merchant transaction ID found');
+        setVerifyingPayment(false);
+        setCanCheckManually(true);
+        return;
+      }
+      
+      const dbStatus = await checkPaymentStatusFromDB(currentOrderId);
+      if (dbStatus && dbStatus.payment_status === 'paid') {
+        if (!invoiceData) await generateAndSaveInvoice(currentOrderId);
+        setPaymentConfirmed(true);
+        setVerifyingPayment(false);
+        setShowPaymentChannel(false);
+        setCanCheckManually(false);
+        toast.success('Payment confirmed!');
+        await fetchOrderDetails(currentOrderId);
+        return;
+      }
+      
+      const result = await verifyPhonePePayment(merchantTransactionId, true);
+      if (result.success) {
+        setPaymentConfirmed(true);
+        setVerifyingPayment(false);
+        setShowPaymentChannel(false);
+        setCanCheckManually(false);
+        toast.success('Payment confirmed!');
+        if (currentOrderId) {
+          await fetchOrderDetails(currentOrderId);
+        }
+      } else if (result.status === 'failed') {
+        setVerifyingPayment(false);
+        setCanCheckManually(true);
+        setShowRetryButton(true);
+      } else {
+        setVerifyingPayment(false);
+        setCanCheckManually(true);
+        toast.info('Payment still pending. Please check again later.');
+      }
+    } catch (error) {
+      console.error('Error in manual check:', error);
+      setVerifyingPayment(false);
+      setCanCheckManually(true);
+      toast.error('Failed to verify payment');
+    }
+  };
+
   // Navigate to order status page
   const goToOrderStatus = (orderId: string) => {
     navigate(`/admin/order-status/${orderId}`);
@@ -600,6 +792,12 @@ export default function AdminPaymentTest() {
   // Navigate to payment confirmation page
   const goToPaymentConfirmation = (orderId: string) => {
     navigate(`/admin/payment-confirmation?orderId=${orderId}`);
+  };
+
+  // Retry payment - reset and start new payment
+  const handleRetryPayment = () => {
+    resetCart();
+    navigate('/admin/payment-test');
   };
 
   const processPayment = async () => {
@@ -612,6 +810,10 @@ export default function AdminPaymentTest() {
     setVerificationAttempts(0);
     setPaymentConfirmed(false);
     setShowPaymentChannel(false);
+    setPollingStopped(false);
+    setCanCheckManually(false);
+    setIsPolling(true);
+    setPaymentCancelled(false);
     
     try {
       const { order, payment, merchantTransactionId } = await saveOrderToSupabase();
@@ -621,10 +823,10 @@ export default function AdminPaymentTest() {
         setPaymentConfirmed(true);
         toast.success(`${paymentMode} payment successful!`);
         setLoading(false);
+        setIsPolling(false);
         
         await fetchOrderDetails(order.id);
         
-        // Navigate to order status page after delay
         setTimeout(() => {
           goToOrderStatus(order.id);
         }, 1500);
@@ -633,15 +835,13 @@ export default function AdminPaymentTest() {
 
       if (!paymentConfirmed && paymentMode === 'upi') {
         const amountPaise = Math.round(grand * 100);
-        
-        // UPDATED: Redirect to payment confirmation page
         const redirectUrl = `${window.location.origin}/admin/payment-confirmation?orderId=${order.id}`;
 
         const payload = {
           action: 'create',
           merchantOrderId: merchantTransactionId,
           amountPaise: amountPaise,
-          redirectUrl: redirectUrl,  // Now points to payment confirmation page
+          redirectUrl: redirectUrl,
           message: `Payment for Order #${order.order_number || order.id.slice(0, 8)}`,
           metaInfo: {
             orderId: order.id,
@@ -666,22 +866,23 @@ export default function AdminPaymentTest() {
             setPhonePeWindow(newWindow);
           }
 
+          // Start polling with limited attempts
           let pollCount = 0;
-          const maxPolls = 30;
+          const maxPolls = 8; // Reduced from 30 to 8 for better UX
           stopPolling();
           
           pollIntervalRef.current = setInterval(async () => {
-            pollCount++;
-            
-            if (pollCount > maxPolls) {
+            // Check if payment was cancelled
+            if (paymentCancelled) {
               stopPolling();
-              setVerifyingPayment(false);
+              setIsPolling(false);
               setLoading(false);
-              setShowRetryButton(true);
-              toast.error('Payment verification timed out.');
               return;
             }
 
+            pollCount++;
+            setVerificationAttempts(pollCount);
+            
             const dbStatus = await checkPaymentStatusFromDB(order.id);
             if (dbStatus && dbStatus.payment_status === 'paid') {
               if (!invoiceData) await generateAndSaveInvoice(order.id);
@@ -689,6 +890,8 @@ export default function AdminPaymentTest() {
               setVerifyingPayment(false);
               setLoading(false);
               setShowPaymentChannel(false);
+              setCanCheckManually(false);
+              setIsPolling(false);
               stopPolling();
               
               if (phonePeWindow && !phonePeWindow.closed) {
@@ -697,43 +900,62 @@ export default function AdminPaymentTest() {
               }
               
               toast.success('Payment successful!');
-              
               await fetchOrderDetails(order.id);
-              
-              // UPDATED: Navigate to payment confirmation page
               goToPaymentConfirmation(order.id);
+              return;
+            }
+
+            // If we've reached max attempts, stop polling and show manual check option
+            if (pollCount >= maxPolls) {
+              stopPolling();
+              setIsPolling(false);
+              setPollingStopped(true);
+              setCanCheckManually(true);
+              setLoading(false);
+              toast.info('Payment verification paused. Click "Check Status" to verify.');
               return;
             }
 
             const verificationResult = await verifyPhonePePayment(merchantTransactionId);
             if (verificationResult.success) {
               setLoading(false);
+              setIsPolling(false);
+              stopPolling();
               if (order.id) {
                 await fetchOrderDetails(order.id);
-                // UPDATED: Navigate to payment confirmation page
                 goToPaymentConfirmation(order.id);
               }
             } else if (verificationResult.status === 'failed') {
               setLoading(false);
+              setIsPolling(false);
+              stopPolling();
               setShowRetryButton(true);
+              setCanCheckManually(false);
             }
-          }, 15000);
+          }, 5000);
 
           timeoutRef.current = setTimeout(() => {
-            stopPolling();
-            setVerifyingPayment(false);
-            setLoading(false);
-            setShowRetryButton(true);
-          }, 300000);
+            if (isPolling && !paymentCancelled) {
+              stopPolling();
+              setIsPolling(false);
+              setPollingStopped(true);
+              setCanCheckManually(true);
+              setLoading(false);
+              toast.info('Payment verification timed out. Click "Check Status" to verify.');
+            }
+          }, 120000);
         } else {
           await updatePaymentStatus(order.id, payment.id, 'failed', merchantTransactionId);
           toast.error('Payment initiation failed.');
           setLoading(false);
+          setIsPolling(false);
+          setShowRetryButton(true);
         }
       }
     } catch (error: any) {
       toast.error('Payment failed. ' + (error.response?.data?.message || error.message));
       setLoading(false);
+      setIsPolling(false);
       setShowRetryButton(true);
     }
   };
@@ -742,6 +964,7 @@ export default function AdminPaymentTest() {
     if (!currentOrderId) return;
     setShowRetryButton(false);
     setVerifyingPayment(true);
+    setCanCheckManually(false);
     
     try {
       const { data: payment } = await supabaseAdmin
@@ -754,6 +977,7 @@ export default function AdminPaymentTest() {
       if (!merchantTransactionId) {
         toast.error('No merchant transaction ID found');
         setVerifyingPayment(false);
+        setCanCheckManually(true);
         return;
       }
       
@@ -763,9 +987,9 @@ export default function AdminPaymentTest() {
         setPaymentConfirmed(true);
         setVerifyingPayment(false);
         setShowPaymentChannel(false);
-        
+        setCanCheckManually(false);
+        toast.success('Payment confirmed!');
         await fetchOrderDetails(currentOrderId);
-        // UPDATED: Navigate to payment confirmation page
         goToPaymentConfirmation(currentOrderId);
         return;
       }
@@ -775,22 +999,25 @@ export default function AdminPaymentTest() {
         setPaymentConfirmed(true);
         setVerifyingPayment(false);
         setShowPaymentChannel(false);
-        
+        setCanCheckManually(false);
+        toast.success('Payment confirmed!');
         if (currentOrderId) {
           await fetchOrderDetails(currentOrderId);
-          // UPDATED: Navigate to payment confirmation page
           goToPaymentConfirmation(currentOrderId);
         }
       } else if (result.status === 'failed') {
         setVerifyingPayment(false);
+        setCanCheckManually(true);
         setShowRetryButton(true);
       } else {
         setVerifyingPayment(false);
-        setShowRetryButton(true);
+        setCanCheckManually(true);
+        toast.info('Payment still pending. Please check again later.');
       }
     } catch (error) {
       console.error('Error in retry:', error);
       setVerifyingPayment(false);
+      setCanCheckManually(true);
       setShowRetryButton(true);
       toast.error('Failed to verify payment');
     }
@@ -902,7 +1129,7 @@ export default function AdminPaymentTest() {
             {currentOrderId && <Button size="sm" variant="ghost" onClick={resetCart}>New order</Button>}
           </div>
 
-          {!paymentConfirmed && (
+          {!paymentConfirmed && !paymentCancelled && (
             <>
               <div className="max-h-[40vh] space-y-2 overflow-auto">
                 {cart.length === 0 && <p className="text-xs text-muted-foreground">No items added yet.</p>}
@@ -965,7 +1192,8 @@ export default function AdminPaymentTest() {
             <div className="flex justify-between text-base font-bold text-maroon"><span>Total</span><span>₹{grand.toFixed(2)}</span></div>
           </div>
 
-          {!paymentConfirmed && !loading && !showPaymentChannel && (
+          {/* Payment Button */}
+          {!paymentConfirmed && !loading && !showPaymentChannel && !pollingStopped && !paymentCancelled && (
             <Button
               disabled={!cart.length || (paymentMode === 'upi' && (!phone || phone.length !== 10))}
               onClick={processPayment}
@@ -975,6 +1203,7 @@ export default function AdminPaymentTest() {
             </Button>
           )}
 
+          {/* Loading State */}
           {loading && (
             <div className="flex items-center justify-center p-4">
               <Loader2 className="animate-spin h-6 w-6 text-maroon mr-2" />
@@ -982,12 +1211,13 @@ export default function AdminPaymentTest() {
             </div>
           )}
 
-          {showPaymentChannel && (
+          {/* Payment Channel - Shows when UPI payment is initiated */}
+          {showPaymentChannel && !paymentCancelled && (
             <div className="space-y-2">
               <div className="rounded-md bg-saffron/10 p-2 text-[11px] text-maroon">
                 <p className="font-semibold flex items-center gap-1">
                   <Loader2 className="h-3 w-3 animate-spin" /> 
-                  📱 Polling for Payment Status... ({verificationAttempts}/30)
+                  📱 Polling for Payment Status... ({verificationAttempts}/8)
                 </p>
               </div>
               {paymentChannelUrl && (
@@ -995,17 +1225,85 @@ export default function AdminPaymentTest() {
                   Open PhonePe Checkout ↗
                 </a>
               )}
-            </div>
-          )}
-
-          {showRetryButton && (
-            <div className="space-y-2 mt-4">
-              <Button onClick={handleRetryVerification} variant="outline" className="w-full border-saffron text-maroon">
-                Retry Verification
+              
+              {/* Cancel Payment Button */}
+              <Button 
+                onClick={cancelPayment} 
+                variant="destructive" 
+                className="w-full bg-red-500 hover:bg-red-600 text-white"
+                disabled={paymentCancelled}
+              >
+                <XCircle className="mr-2 h-4 w-4" />
+                Cancel Payment
               </Button>
             </div>
           )}
 
+          {/* Manual Check Status - Shows after polling stops */}
+          {pollingStopped && canCheckManually && !paymentConfirmed && !paymentCancelled && (
+            <div className="space-y-2">
+              <div className="rounded-md bg-amber-50 border border-amber-200 p-2 text-[11px] text-amber-700">
+                <p className="font-semibold">⏳ Payment verification paused</p>
+                <p className="text-xs">Click below to check payment status manually</p>
+              </div>
+              <Button 
+                onClick={handleManualCheck} 
+                variant="outline" 
+                className="w-full border-amber-500 text-amber-700 hover:bg-amber-50"
+                disabled={verifyingPayment}
+              >
+                {verifyingPayment ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Check Status
+              </Button>
+              <Button 
+                onClick={cancelPayment} 
+                variant="destructive" 
+                className="w-full bg-red-500 hover:bg-red-600 text-white"
+              >
+                <XCircle className="mr-2 h-4 w-4" />
+                Cancel Payment
+              </Button>
+            </div>
+          )}
+
+          {/* Retry Button - Shows when payment fails */}
+          {showRetryButton && !paymentConfirmed && (
+            <div className="space-y-2 mt-4">
+              <div className="rounded-md bg-red-50 border border-red-200 p-2 text-[11px] text-red-700">
+                <p className="font-semibold">❌ Payment failed</p>
+                <p className="text-xs">You can retry the payment or check status</p>
+              </div>
+              <Button onClick={handleRetryVerification} variant="outline" className="w-full border-saffron text-maroon">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Retry Verification
+              </Button>
+              <Button onClick={handleRetryPayment} className="w-full bg-maroon text-cream hover:bg-maroon/90">
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Try Again
+              </Button>
+            </div>
+          )}
+
+          {/* Payment Cancelled State */}
+          {paymentCancelled && (
+            <div className="space-y-2 mt-4">
+              <div className="rounded-md bg-red-50 border border-red-200 p-3 text-center text-red-700">
+                <XCircle className="h-8 w-8 mx-auto mb-2" />
+                <p className="font-bold">Payment Cancelled</p>
+                <p className="text-xs">You can start a new payment</p>
+              </div>
+              <Button onClick={handleRetryPayment} className="w-full bg-maroon text-cream hover:bg-maroon/90">
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Start New Payment
+              </Button>
+            </div>
+          )}
+
+          {/* Payment Confirmed State */}
           {paymentConfirmed && currentOrderId && !orderDetails && (
             <div className="space-y-4 mt-4">
               <div className="rounded-md border border-green-500/30 bg-green-50 p-3 text-green-700 text-center">
@@ -1022,6 +1320,7 @@ export default function AdminPaymentTest() {
             </div>
           )}
 
+          {/* Invoice View */}
           {paymentConfirmed && invoiceData && (
             <div className="space-y-2 mt-2">
               <Button 
