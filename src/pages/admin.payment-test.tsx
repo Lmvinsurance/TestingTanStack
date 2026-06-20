@@ -19,7 +19,8 @@ import {
   listWalkinMenu,
 } from '@/lib/admin-walkin.functions';
 
-const API_PATH = 'https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/';
+// Use Supabase Edge Function instead of AWS API Gateway
+const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
 const BUCKET = 'invoices';
 
 function fmt(n: number) { 
@@ -186,7 +187,7 @@ export default function AdminPaymentTest() {
   const [taxPct, setTaxPct] = useState(5);
   const [discount, setDiscount] = useState(0);
 
-  // Original payment-test state
+  // Payment state
   const [loading, setLoading] = useState(false);
   const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
   const [invoiceData, setInvoiceData] = useState<any>(null);
@@ -259,16 +260,20 @@ export default function AdminPaymentTest() {
   const tax = Math.round(taxable * ((Number(taxPct) || 0) / 100) * 100) / 100;
   const grand = Math.round((taxable + tax) * 100) / 100;
 
-  // ---------------- PAYMENT LOGIC FROM PAYMENT-TEST ----------------
+  // ---------------- PAYMENT LOGIC ----------------
 
   useEffect(() => {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      // We can't safely close the window here without risking closing it on re-renders if phonePeWindow is tracked, 
-      // but if we use empty deps, we close it on unmount.
     };
   }, []);
+
+  // Generate merchant transaction ID in format: ORDID + timestamp
+  const generateMerchantTransactionId = () => {
+    const timestamp = Date.now();
+    return `ORDID${timestamp}`;
+  };
 
   const saveOrderToSupabase = async (paymentResponse?: any) => {
     try {
@@ -314,7 +319,8 @@ export default function AdminPaymentTest() {
       const { error: itemsError } = await supabaseAdmin.from("order_items").insert(orderItems);
       if (itemsError) throw new Error('Failed to create order items: ' + itemsError.message);
 
-      const merchantTransactionId = `PHONEPE-${order.order_number}-${Date.now()}`;
+      // Generate merchant transaction ID in format: ORDID + timestamp
+      const merchantTransactionId = generateMerchantTransactionId();
       
       const pMode = paymentMode === 'upi' ? 'upi' : paymentMode === 'card_machine' ? 'card' : 'cash';
       const pg = paymentMode === 'upi' ? 'phonepe' : paymentMode;
@@ -466,89 +472,91 @@ export default function AdminPaymentTest() {
     }
   };
 
-  const verifyPhonePePayment = async (orderId: string, isManual = false) => {
+  // Verify payment through Supabase Edge Function
+  const verifyPhonePePayment = async (merchantTransactionId: string, isManual = false) => {
     try {
       if (!isManual) {
         setVerifyingPayment(true);
         setVerificationAttempts(prev => prev + 1);
       }
       
-      const orderStatus = await checkPaymentStatusFromDB(orderId);
-      if (orderStatus && orderStatus.payment_status === 'paid') {
-        if (!invoiceData) await generateAndSaveInvoice(orderId);
-        setPaymentConfirmed(true);
-        setVerifyingPayment(false);
-        stopPolling();
-        setShowPaymentChannel(false);
-        return { success: true, alreadyPaid: true };
+      // First check if already paid in database
+      if (currentOrderId) {
+        const orderStatus = await checkPaymentStatusFromDB(currentOrderId);
+        if (orderStatus && orderStatus.payment_status === 'paid') {
+          if (!invoiceData) await generateAndSaveInvoice(currentOrderId);
+          setPaymentConfirmed(true);
+          setVerifyingPayment(false);
+          stopPolling();
+          setShowPaymentChannel(false);
+          return { success: true, alreadyPaid: true };
+        }
       }
 
-      // First try the direct PhonePe API as requested
+      // Call Supabase Edge Function to check PhonePe payment status
       try {
-        const { data: payment } = await supabaseAdmin
-          .from("payments")
-          .select("merchant_transaction_id")
-          .eq("order_id", orderId)
-          .single();
+        const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
+          action: 'status',
+          merchantOrderId: merchantTransactionId
+        });
+
+        if (response.data) {
+          const result = response.data;
           
-        const merchantTxnId = payment?.merchant_transaction_id || `PHONEPE-${orderId}`;
-        
-        const directResponse = await axios.get(`https://api.phonepe.com/apis/pg/checkout/v2/order/${merchantTxnId}/status`);
-        const directData = directResponse.data;
-        
-        const isSuccess = directData?.success === true || directData?.state === 'COMPLETED' || directData?.paymentStatus === 'success';
-        
-        if (isSuccess) {
-          stopPolling();
-          await updatePaymentStatus(orderId, payment?.id || null, 'success', `VERIFIED-${Date.now()}`);
-          setPaymentConfirmed(true);
-          setVerifyingPayment(false);
-          setShowPaymentChannel(false);
-          toast.success(`Payment successful via direct check!`);
-          if (phonePeWindow && !phonePeWindow.closed) {
-            phonePeWindow.close();
-            setPhonePeWindow(null);
-          }
-          return { success: true };
-        } else if (directData?.state === 'FAILED') {
-          stopPolling();
-          setVerifyingPayment(false);
-          toast.error('Payment failed.');
-          setShowRetryButton(true);
-          return { success: false, status: 'failed' };
-        }
-      } catch (directErr) {
-        console.log("Direct PhonePe API check failed or pending, falling back to AWS backend...", directErr);
-      }
+          // Check payment status from response
+          // The Edge Function returns the raw PhonePe response
+          const isSuccess = 
+            result.state === 'COMPLETED' || 
+            result.status === 'SUCCESS' ||
+            result.paymentState === 'COMPLETED' ||
+            result.success === true;
 
-      // Fallback to original AWS API gateway verification
-      const response = await axios.post(`${API_PATH}api/admin/phonepe/verify`, { orderId: orderId });
-
-      if (response.data) {
-        if (response.data.paymentStatus === 'success') {
-          stopPolling();
-          await updatePaymentStatus(orderId, null, 'success', `VERIFIED-${Date.now()}`);
-          setPaymentConfirmed(true);
-          setVerifyingPayment(false);
-          setShowPaymentChannel(false);
-          toast.success(`Payment successful!`);
-          if (phonePeWindow && !phonePeWindow.closed) {
-            phonePeWindow.close();
-            setPhonePeWindow(null);
+          if (isSuccess) {
+            stopPolling();
+            if (currentOrderId) {
+              await updatePaymentStatus(currentOrderId, null, 'success', merchantTransactionId);
+            }
+            setPaymentConfirmed(true);
+            setVerifyingPayment(false);
+            setShowPaymentChannel(false);
+            toast.success(`Payment successful!`);
+            if (phonePeWindow && !phonePeWindow.closed) {
+              phonePeWindow.close();
+              setPhonePeWindow(null);
+            }
+            return { success: true };
+          } else if (result.state === 'FAILED' || result.status === 'FAILED' || result.paymentState === 'FAILED') {
+            stopPolling();
+            setVerifyingPayment(false);
+            toast.error('Payment failed.');
+            setShowRetryButton(true);
+            return { success: false, status: 'failed' };
+          } else {
+            // Still pending
+            return { success: false, status: 'pending' };
           }
-          return { success: true };
-        } else if (response.data.paymentStatus === 'failed') {
-          stopPolling();
-          setVerifyingPayment(false);
-          toast.error('Payment failed.');
-          setShowRetryButton(true);
-          return { success: false, status: 'failed' };
-        } else {
-          return { success: false, status: 'pending' };
         }
+        return { success: false, status: 'pending' };
+      } catch (err: any) {
+        console.error('Supabase Edge Function error:', err.response?.data || err.message);
+        
+        // If API call fails, check database status
+        if (currentOrderId) {
+          const dbCheck = await checkPaymentStatusFromDB(currentOrderId);
+          if (dbCheck && dbCheck.payment_status === 'paid') {
+            if (!invoiceData) await generateAndSaveInvoice(currentOrderId);
+            setPaymentConfirmed(true);
+            setVerifyingPayment(false);
+            stopPolling();
+            setShowPaymentChannel(false);
+            return { success: true };
+          }
+        }
+        
+        return { success: false, status: 'pending', error: err.message };
       }
-      return { success: false, status: 'pending' };
     } catch (error: any) {
+      console.error('Verification error:', error);
       setVerifyingPayment(false);
       return { success: false, error: error.message };
     }
@@ -577,33 +585,34 @@ export default function AdminPaymentTest() {
       }
 
       if (!paymentConfirmed && paymentMode === 'upi') {
-        const orderItems = cart.map(item => ({
-          item_id: item.itemId,
-          title: item.itemName,
-          description: item.variantName || '',
-          price: item.unitPrice,
-          quantity: item.quantity,
-          variant: item.variantName || 'Regular'
-        }));
+        // Calculate amount in paise (PhonePe requires amount in paise)
+        const amountPaise = Math.round(grand * 100);
+        
+        // Build redirect URL - this should point to your app/success page
+        const redirectUrl = `${window.location.origin}/admin/payment-confirmation?orderId=${order.id}`;
 
         const payload = {
-          mobilenumber: phone,
-          customer_name: name || 'Guest',
-          total_amount: grand,
-          order_status: 'PENDING',
-          order_items: orderItems,
-          order_type: `Online-${branch}`,
-          restaurant_id: 1,
-          payment_status: 'PENDING',
-          order_id: order.id
+          action: 'create',
+          merchantOrderId: merchantTransactionId,
+          amountPaise: amountPaise,
+          redirectUrl: redirectUrl,
+          message: `Payment for Order #${order.order_number || order.id.slice(0, 8)}`,
+          metaInfo: {
+            orderId: order.id,
+            customerName: name || 'Guest',
+            customerPhone: phone || '',
+            outletId: effectiveOutletId
+          }
         };
 
-        const response = await axios.post(`${API_PATH}api/admin/phonepay/order`, payload);
+        // Use Supabase Edge Function to initiate payment
+        const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, payload);
 
-        if (response.status === 200 && response.data.result) {
-          await updatePaymentStatus(order.id, payment.id, 'pending', response.data.result.transactionId || merchantTransactionId);
+        if (response.status === 200 && response.data?.redirectUrl) {
+          // Update payment record with transaction details
+          await updatePaymentStatus(order.id, payment.id, 'pending', merchantTransactionId);
 
-          const channelUrl = response.data.result.redirectUrl;
+          const channelUrl = response.data.redirectUrl;
           setPaymentChannelUrl(channelUrl);
           setShowPaymentChannel(true);
           toast.success('Payment initiated!');
@@ -613,14 +622,13 @@ export default function AdminPaymentTest() {
             setPhonePeWindow(newWindow);
           }
 
+          // Start polling for payment status
           let pollCount = 0;
           const maxPolls = 30;
           stopPolling();
           
           pollIntervalRef.current = setInterval(async () => {
             pollCount++;
-            // We update the UI in verifyPhonePePayment, but we can do it here too
-            // setVerificationAttempts(pollCount); // verifyPhonePePayment already increments it
             
             if (pollCount > maxPolls) {
               stopPolling();
@@ -642,14 +650,15 @@ export default function AdminPaymentTest() {
               return;
             }
 
-            const verificationResult = await verifyPhonePePayment(order.id);
+            // Call Edge Function for verification
+            const verificationResult = await verifyPhonePePayment(merchantTransactionId);
             if (verificationResult.success) {
               setLoading(false);
             } else if (verificationResult.status === 'failed') {
               setLoading(false);
               setShowRetryButton(true);
             }
-          }, 20000);
+          }, 15000);
 
           timeoutRef.current = setTimeout(() => {
             stopPolling();
@@ -674,25 +683,48 @@ export default function AdminPaymentTest() {
     if (!currentOrderId) return;
     setShowRetryButton(false);
     setVerifyingPayment(true);
-    const dbStatus = await checkPaymentStatusFromDB(currentOrderId);
-    if (dbStatus && dbStatus.payment_status === 'paid') {
-      if (!invoiceData) await generateAndSaveInvoice(currentOrderId);
-      setPaymentConfirmed(true);
-      setVerifyingPayment(false);
-      setShowPaymentChannel(false);
-      return;
-    }
-    const result = await verifyPhonePePayment(currentOrderId, true);
-    if (result.success) {
-      setPaymentConfirmed(true);
-      setVerifyingPayment(false);
-      setShowPaymentChannel(false);
-    } else if (result.status === 'failed') {
+    
+    try {
+      // Get merchant transaction ID from database
+      const { data: payment } = await supabaseAdmin
+        .from("payments")
+        .select("merchant_transaction_id")
+        .eq("order_id", currentOrderId)
+        .single();
+      
+      const merchantTransactionId = payment?.merchant_transaction_id;
+      if (!merchantTransactionId) {
+        toast.error('No merchant transaction ID found');
+        setVerifyingPayment(false);
+        return;
+      }
+      
+      const dbStatus = await checkPaymentStatusFromDB(currentOrderId);
+      if (dbStatus && dbStatus.payment_status === 'paid') {
+        if (!invoiceData) await generateAndSaveInvoice(currentOrderId);
+        setPaymentConfirmed(true);
+        setVerifyingPayment(false);
+        setShowPaymentChannel(false);
+        return;
+      }
+      
+      const result = await verifyPhonePePayment(merchantTransactionId, true);
+      if (result.success) {
+        setPaymentConfirmed(true);
+        setVerifyingPayment(false);
+        setShowPaymentChannel(false);
+      } else if (result.status === 'failed') {
+        setVerifyingPayment(false);
+        setShowRetryButton(true);
+      } else {
+        setVerifyingPayment(false);
+        setShowRetryButton(true);
+      }
+    } catch (error) {
+      console.error('Error in retry:', error);
       setVerifyingPayment(false);
       setShowRetryButton(true);
-    } else {
-      setVerifyingPayment(false);
-      setShowRetryButton(true);
+      toast.error('Failed to verify payment');
     }
   };
 
@@ -700,7 +732,7 @@ export default function AdminPaymentTest() {
 
   return (
     <AdminPage>
-      <AdminHeader title="Payment Test (Original Logic + Walkin UI)" subtitle="Direct Supabase & API Gateway integration with Walkin UI" />
+      <AdminHeader title="Payment Test" subtitle="PhonePe via Supabase Edge Function" />
       <div className="grid gap-4 px-4 py-4 lg:grid-cols-[1fr_400px]">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
