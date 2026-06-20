@@ -6,7 +6,7 @@ import { supabaseAdmin } from '@/integrations/supabase/client.server';
 import { supabase } from '@/integrations/supabase/client';
 import { AdminPage } from '@/components/admin/AdminShell';
 import { Button } from '@/components/ui/button';
-import { Loader2, CheckCircle2, XCircle, Eye, RotateCcw, Home, FileText, Printer } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, Eye, RotateCcw, Home, FileText, Printer, RefreshCw } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -155,6 +155,7 @@ export default function PaymentConfirmation() {
   const [invoiceData, setInvoiceData] = useState<any>(null);
   const [merchantTransactionId, setMerchantTransactionId] = useState<string | null>(null);
   const [phonePeResponse, setPhonePeResponse] = useState<any>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     const orderIdParam = searchParams.get('orderId');
@@ -172,9 +173,67 @@ export default function PaymentConfirmation() {
     };
   }, [searchParams]);
 
-  const checkPhonePeStatus = async (orderId: string) => {
+  // Helper function to get a valid system user ID
+  const getSystemUserId = async (): Promise<string | null> => {
+    try {
+      // First try to get the current authenticated user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        return user.id;
+      }
+
+      // If no authenticated user, try to find a system user by email
+      const { data: users, error } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('email', 'system@telugufoodclub.com')
+        .limit(1);
+
+      if (!error && users && users.length > 0) {
+        return users[0].id;
+      }
+
+      // If no system user, try to find any admin user
+      const { data: admins, error: adminError } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1);
+
+      if (!adminError && admins && admins.length > 0) {
+        return admins[0].id;
+      }
+
+      // If all else fails, return null (since the column is nullable)
+      console.warn('No user found, using null for user ID');
+      return null;
+    } catch (error) {
+      console.error('Error fetching system user:', error);
+      return null;
+    }
+  };
+
+  const checkPhonePeStatus = async (orderId: string, showToast: boolean = true) => {
     try {
       setLoading(true);
+      
+      // FIRST: Check if order already has a successful status
+      const { data: existingOrder } = await supabaseAdmin
+        .from('orders')
+        .select('payment_status, order_status')
+        .eq('id', orderId)
+        .single();
+
+      // If already paid/successful, skip the API call
+      if (existingOrder?.payment_status === 'paid' || existingOrder?.order_status === 'received') {
+        console.log('Order already marked as paid/received');
+        setStatus('success');
+        await fetchOrderDetails(orderId);
+        await generateAndSaveInvoice(orderId, null);
+        setLoading(false);
+        if (showToast) toast.success('Payment already confirmed!');
+        return;
+      }
       
       // Step 1: Get merchant transaction ID from database
       const { data: payment, error: paymentError } = await supabaseAdmin
@@ -186,7 +245,7 @@ export default function PaymentConfirmation() {
       if (paymentError || !payment?.merchant_transaction_id) {
         await fetchOrderDetails(orderId);
         setStatus('pending');
-        toast.warning('No transaction found. Please check manually.');
+        if (showToast) toast.warning('No transaction found. Please check manually.');
         setLoading(false);
         return;
       }
@@ -208,18 +267,24 @@ export default function PaymentConfirmation() {
         // Step 3: Save PhonePe response to database
         await savePhonePeResponse(orderId, paymentId, result);
         
-        // Step 4: Check if payment is successful
+        // Step 4: Check if payment is successful - Check BOTH state AND paymentDetails state
         const isSuccess = 
           result.state === 'COMPLETED' || 
           result.status === 'SUCCESS' ||
           result.paymentState === 'COMPLETED' ||
-          result.success === true;
+          result.success === true ||
+          (result.paymentDetails && result.paymentDetails.length > 0 && 
+           result.paymentDetails[0].state === 'COMPLETED');
 
         const isFailed = 
           result.state === 'FAILED' || 
           result.status === 'FAILED' ||
           result.paymentState === 'FAILED' ||
-          result.success === false;
+          result.success === false ||
+          (result.paymentDetails && result.paymentDetails.length > 0 && 
+           result.paymentDetails[0].state === 'FAILED');
+
+        console.log('Payment check result:', { isSuccess, isFailed, state: result.state });
 
         if (isSuccess) {
           // Step 5: Update database with success status
@@ -229,7 +294,7 @@ export default function PaymentConfirmation() {
           await generateAndSaveInvoice(orderId, result);
           
           setStatus('success');
-          toast.success('Payment confirmed!');
+          if (showToast) toast.success('Payment confirmed!');
           
           // Step 7: Fetch updated order details
           await fetchOrderDetails(orderId);
@@ -237,11 +302,11 @@ export default function PaymentConfirmation() {
         } else if (isFailed) {
           await updateOrderStatus(orderId, 'failed', merchantId, result);
           setStatus('failed');
-          toast.error('Payment failed');
+          if (showToast) toast.error('Payment failed');
           await fetchOrderDetails(orderId);
         } else {
           setStatus('pending');
-          toast.info('Payment is still processing. Please wait...');
+          if (showToast) toast.info('Payment is still processing. Please wait...');
           startPolling(orderId, merchantId, paymentId);
         }
       } else {
@@ -261,12 +326,14 @@ export default function PaymentConfirmation() {
         setStatus('success');
         await generateAndSaveInvoice(orderId, null);
         await fetchOrderDetails(orderId);
+        if (showToast) toast.success('Payment already confirmed!');
       } else if (order?.payment_status === 'failed' || order?.order_status === 'payment_failed') {
         setStatus('failed');
         await fetchOrderDetails(orderId);
+        if (showToast) toast.error('Payment failed');
       } else {
         setStatus('pending');
-        toast.warning('Unable to verify payment status. Please check manually.');
+        if (showToast) toast.warning('Unable to verify payment status. Please check manually.');
         await fetchOrderDetails(orderId);
       }
     } finally {
@@ -276,11 +343,17 @@ export default function PaymentConfirmation() {
 
   const savePhonePeResponse = async (orderId: string, paymentId: string, phonePeResult: any) => {
     try {
+      // Get transaction ID from paymentDetails if available
+      let transactionId = phonePeResult?.orderId;
+      if (phonePeResult?.paymentDetails && phonePeResult.paymentDetails.length > 0) {
+        transactionId = phonePeResult.paymentDetails[0].transactionId || phonePeResult.orderId;
+      }
+
       await supabaseAdmin
         .from('payments')
         .update({
           gateway_response_snapshot: phonePeResult,
-          transaction_id: phonePeResult?.paymentDetails?.[0]?.transactionId || phonePeResult?.orderId,
+          transaction_id: transactionId,
           payment_mode: phonePeResult?.paymentDetails?.[0]?.paymentMode || 'upi',
         })
         .eq('id', paymentId);
@@ -295,60 +368,105 @@ export default function PaymentConfirmation() {
     try {
       const isSuccess = status === 'success';
       
-      console.log('Updating order status to:', isSuccess ? 'success' : 'failed');
+      console.log('🔄 Updating order status to:', isSuccess ? 'SUCCESS' : 'FAILED');
+      
+      // Get system user ID
+      const systemUserId = await getSystemUserId();
+      console.log('👤 System user ID:', systemUserId);
       
       // Get payment ID
-      const { data: payment } = await supabaseAdmin
+      const { data: payment, error: paymentFetchError } = await supabaseAdmin
         .from('payments')
         .select('id')
         .eq('merchant_transaction_id', merchantId)
         .single();
 
+      if (paymentFetchError) {
+        console.error('❌ Error fetching payment:', paymentFetchError);
+        throw new Error('Payment record not found');
+      }
+
+      // Get transaction ID from paymentDetails
+      let transactionId = phonePeResult?.orderId;
+      if (phonePeResult?.paymentDetails && phonePeResult.paymentDetails.length > 0) {
+        transactionId = phonePeResult.paymentDetails[0].transactionId || phonePeResult.orderId;
+      }
+
       // Update payments table
-      await supabaseAdmin
+      const { error: paymentUpdateError } = await supabaseAdmin
         .from('payments')
         .update({
           payment_status: isSuccess ? 'success' : 'failed',
           paid_at: isSuccess ? new Date().toISOString() : null,
           gateway_response_snapshot: phonePeResult,
-          transaction_id: phonePeResult?.paymentDetails?.[0]?.transactionId || merchantId,
+          transaction_id: transactionId,
         })
         .eq('merchant_transaction_id', merchantId);
 
-      // Update orders table
-      await supabaseAdmin
-        .from('orders')
-        .update({
-          payment_status: isSuccess ? 'paid' : 'failed',
-          order_status: isSuccess ? 'received' : 'payment_failed',
-          last_updated_by: 'system',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', orderId);
+      if (paymentUpdateError) {
+        console.error('❌ Error updating payment:', paymentUpdateError);
+        throw new Error('Failed to update payment record');
+      }
 
-      console.log('Order updated successfully:', {
-        orderId,
+      // Update orders table with correct statuses
+      const orderUpdateData = {
         payment_status: isSuccess ? 'paid' : 'failed',
-        order_status: isSuccess ? 'received' : 'payment_failed'
+        order_status: isSuccess ? 'received' : 'payment_failed',
+        last_updated_by: systemUserId,
+        updated_at: new Date().toISOString(),
+      };
+
+      console.log('📝 Updating order with:', orderUpdateData);
+
+      const { data: updatedOrder, error: orderUpdateError } = await supabaseAdmin
+        .from('orders')
+        .update(orderUpdateData)
+        .eq('id', orderId)
+        .select()
+        .single();
+
+      if (orderUpdateError) {
+        console.error('❌ Error updating order:', orderUpdateError);
+        throw new Error('Failed to update order record');
+      }
+
+      console.log('✅ Order updated successfully:', {
+        orderId,
+        payment_status: orderUpdateData.payment_status,
+        order_status: orderUpdateData.order_status,
+        updatedOrder
       });
 
-      // ✅ Add status history with all fields including ip_address
-      await supabaseAdmin
-        .from('order_status_history')
-        .insert({
-          order_id: orderId,
-          old_status: 'pending_payment',
-          new_status: isSuccess ? 'received' : 'payment_failed',
-          remarks: isSuccess ? 'Payment confirmed via PhonePe' : 'Payment failed',
-          changed_by: 'system',
-          changed_by_role: 'system',
-          ip_address: null, // You can get client IP if needed
-          created_at: new Date().toISOString()
-        });
+      // Add status history with all fields
+      const historyData = {
+        order_id: orderId,
+        old_status: 'pending_payment',
+        new_status: isSuccess ? 'received' : 'payment_failed',
+        remarks: isSuccess ? 'Payment confirmed via PhonePe' : 'Payment failed',
+        changed_by: systemUserId,
+        changed_by_role: 'system',
+        ip_address: null,
+        created_at: new Date().toISOString()
+      };
 
-      toast.success(isSuccess ? 'Payment status updated successfully!' : 'Payment status updated.');
+      console.log('📜 Adding status history:', historyData);
+
+      const { error: historyError } = await supabaseAdmin
+        .from('order_status_history')
+        .insert(historyData);
+
+      if (historyError) {
+        console.error('❌ Error adding status history:', historyError);
+        // Don't throw here, as the order update was successful
+      } else {
+        console.log('✅ Status history added successfully');
+      }
+
+      toast.success(isSuccess ? '✅ Payment status updated successfully!' : 'Payment status updated.');
+      return updatedOrder;
+      
     } catch (error) {
-      console.error('Error updating order status:', error);
+      console.error('❌ Error updating order status:', error);
       toast.error('Failed to update payment status: ' + (error as Error).message);
       throw error;
     }
@@ -379,6 +497,10 @@ export default function PaymentConfirmation() {
         `)
         .eq('id', orderId)
         .single();
+
+      if (!order) {
+        throw new Error('Order not found');
+      }
 
       const { data: items } = await supabaseAdmin
         .from('order_items')
@@ -479,6 +601,15 @@ export default function PaymentConfirmation() {
       if (error) throw error;
       setOrderDetails(order);
       
+      // Update status based on order data
+      if (order.payment_status === 'paid' || order.order_status === 'received') {
+        setStatus('success');
+      } else if (order.payment_status === 'failed' || order.order_status === 'payment_failed') {
+        setStatus('failed');
+      } else {
+        setStatus('pending');
+      }
+      
       if (order.invoices && order.invoices.length > 0) {
         setInvoiceData(order.invoices[0]);
       }
@@ -515,13 +646,17 @@ export default function PaymentConfirmation() {
             result.state === 'COMPLETED' || 
             result.status === 'SUCCESS' ||
             result.paymentState === 'COMPLETED' ||
-            result.success === true;
+            result.success === true ||
+            (result.paymentDetails && result.paymentDetails.length > 0 && 
+             result.paymentDetails[0].state === 'COMPLETED');
 
           const isFailed = 
             result.state === 'FAILED' || 
             result.status === 'FAILED' ||
             result.paymentState === 'FAILED' ||
-            result.success === false;
+            result.success === false ||
+            (result.paymentDetails && result.paymentDetails.length > 0 && 
+             result.paymentDetails[0].state === 'FAILED');
 
           if (isSuccess) {
             await updateOrderStatus(orderId, 'success', merchantId, result);
@@ -556,6 +691,13 @@ export default function PaymentConfirmation() {
     }, 3000);
 
     return () => clearInterval(interval);
+  };
+
+  const handleCheckStatus = async () => {
+    if (!orderId) return;
+    setIsUpdating(true);
+    await checkPhonePeStatus(orderId, true);
+    setIsUpdating(false);
   };
 
   const handleViewOrder = () => {
@@ -706,15 +848,15 @@ export default function PaymentConfirmation() {
     );
   }
 
-  // Render failed state
+  // Render failed state with Check Status button
   if (status === 'failed') {
     return (
       <AdminPage>
         <div className="flex min-h-[60vh] items-center justify-center px-4">
           <div className="w-full max-w-md rounded-2xl border border-red-500/30 bg-red-50 p-8 text-center">
             <XCircle className="mx-auto h-16 w-16 text-red-500" />
-            <h2 className="mt-4 text-2xl font-bold text-red-700">Payment Failed</h2>
-            <p className="mt-2 text-sm text-red-600">Your payment could not be processed</p>
+            <h2 className="mt-4 text-2xl font-bold text-red-700">Payment Status Issue</h2>
+            <p className="mt-2 text-sm text-red-600">The payment may have been successful but the status wasn't updated</p>
             
             {orderId && orderDetails && (
               <div className="mt-4 rounded-lg bg-white p-4 text-left shadow-sm">
@@ -725,6 +867,10 @@ export default function PaymentConfirmation() {
                 <div className="mt-1 flex justify-between text-sm">
                   <span className="text-muted-foreground">Amount</span>
                   <span className="font-semibold text-maroon">{formatCurrency(orderDetails.grand_total)}</span>
+                </div>
+                <div className="mt-1 flex justify-between text-sm">
+                  <span className="text-muted-foreground">Current Status</span>
+                  <span className="font-semibold text-red-600">{orderDetails.order_status}</span>
                 </div>
                 {phonePeResponse && (
                   <div className="mt-2 border-t border-red-200 pt-2">
@@ -740,11 +886,28 @@ export default function PaymentConfirmation() {
             )}
 
             <div className="mt-6 space-y-3">
-              <Button onClick={handleRetry} className="w-full bg-maroon text-cream hover:bg-maroon/90">
-                <RotateCcw className="mr-2 h-4 w-4" />
-                Try Again
+              <Button 
+                onClick={handleCheckStatus} 
+                className="w-full bg-maroon text-cream hover:bg-maroon/90"
+                disabled={isUpdating}
+              >
+                {isUpdating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Checking Status...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Check Payment Status
+                  </>
+                )}
               </Button>
-              <Button onClick={handleGoHome} variant="outline" className="w-full">
+              <Button onClick={handleRetry} variant="outline" className="w-full">
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Try Payment Again
+              </Button>
+              <Button onClick={handleGoHome} variant="ghost" className="w-full">
                 <Home className="mr-2 h-4 w-4" />
                 Go to Dashboard
               </Button>
@@ -787,6 +950,10 @@ export default function PaymentConfirmation() {
 
           {orderId && (
             <div className="mt-6 space-y-3">
+              <Button onClick={handleCheckStatus} variant="outline" className="w-full">
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Check Status Now
+              </Button>
               <Button onClick={handleViewOrder} variant="outline" className="w-full">
                 <Eye className="mr-2 h-4 w-4" />
                 Check Order Status
