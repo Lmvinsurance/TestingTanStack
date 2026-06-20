@@ -124,7 +124,6 @@ export default function PaymentConfirmation() {
     const orderIdParam = searchParams.get('orderId');
     if (orderIdParam) {
       setOrderId(orderIdParam);
-      // First call PhonePe API to check status
       checkPhonePeStatus(orderIdParam);
     } else {
       setLoading(false);
@@ -144,12 +143,11 @@ export default function PaymentConfirmation() {
       // Step 1: Get merchant transaction ID from database
       const { data: payment, error: paymentError } = await supabaseAdmin
         .from('payments')
-        .select('merchant_transaction_id')
+        .select('merchant_transaction_id, id')
         .eq('order_id', orderId)
         .single();
 
       if (paymentError || !payment?.merchant_transaction_id) {
-        // If no payment record, fetch order details
         await fetchOrderDetails(orderId);
         setStatus('pending');
         toast.warning('No transaction found. Please check manually.');
@@ -158,6 +156,7 @@ export default function PaymentConfirmation() {
       }
 
       const merchantId = payment.merchant_transaction_id;
+      const paymentId = payment.id;
       setMerchantTransactionId(merchantId);
 
       // Step 2: Call PhonePe Edge Function to check status
@@ -167,10 +166,13 @@ export default function PaymentConfirmation() {
       });
 
       if (response.data) {
-        setPhonePeResponse(response.data);
         const result = response.data;
+        setPhonePeResponse(result);
         
-        // Step 3: Check if payment is successful based on PhonePe response
+        // Step 3: Save PhonePe response to database
+        await savePhonePeResponse(orderId, paymentId, result);
+        
+        // Step 4: Check if payment is successful based on PhonePe response
         const isSuccess = 
           result.state === 'COMPLETED' || 
           result.status === 'SUCCESS' ||
@@ -184,38 +186,35 @@ export default function PaymentConfirmation() {
           result.success === false;
 
         if (isSuccess) {
-          // Step 4: Update database with success status
+          // Step 5: Update database with success status
           await updateOrderStatus(orderId, 'success', merchantId, result);
           
-          // Step 5: Generate invoice
-          await generateInvoice(orderId);
+          // Step 6: Generate and save invoice
+          await generateAndSaveInvoice(orderId, result);
           
           setStatus('success');
           toast.success('Payment confirmed!');
           
-          // Step 6: Fetch updated order details
+          // Step 7: Fetch updated order details
           await fetchOrderDetails(orderId);
           
         } else if (isFailed) {
-          // Update database with failed status
           await updateOrderStatus(orderId, 'failed', merchantId, result);
           setStatus('failed');
           toast.error('Payment failed');
           await fetchOrderDetails(orderId);
         } else {
-          // Still pending - start polling
           setStatus('pending');
           toast.info('Payment is still processing. Please wait...');
-          startPolling(orderId, merchantId);
+          startPolling(orderId, merchantId, paymentId);
         }
       } else {
         setStatus('pending');
-        startPolling(orderId, merchantId);
+        startPolling(orderId, merchantId, paymentId);
       }
     } catch (error: any) {
       console.error('Error checking PhonePe status:', error);
       
-      // If Edge Function fails, check database status as fallback
       const { data: order } = await supabaseAdmin
         .from('orders')
         .select('payment_status, order_status')
@@ -224,7 +223,7 @@ export default function PaymentConfirmation() {
 
       if (order?.payment_status === 'paid' || order?.order_status === 'received') {
         setStatus('success');
-        await generateInvoice(orderId);
+        await generateAndSaveInvoice(orderId, null);
         await fetchOrderDetails(orderId);
       } else if (order?.payment_status === 'failed' || order?.order_status === 'payment_failed') {
         setStatus('failed');
@@ -239,17 +238,42 @@ export default function PaymentConfirmation() {
     }
   };
 
+  // Save PhonePe response to database
+  const savePhonePeResponse = async (orderId: string, paymentId: string, phonePeResult: any) => {
+    try {
+      await supabaseAdmin
+        .from('payments')
+        .update({
+          gateway_response_snapshot: phonePeResult,
+          transaction_id: phonePeResult?.paymentDetails?.[0]?.transactionId || phonePeResult?.orderId,
+          payment_mode: phonePeResult?.paymentDetails?.[0]?.paymentMode || 'upi',
+        })
+        .eq('id', paymentId);
+
+      console.log('PhonePe response saved to database');
+    } catch (error) {
+      console.error('Error saving PhonePe response:', error);
+    }
+  };
+
   const updateOrderStatus = async (orderId: string, status: string, merchantId: string, phonePeResult: any) => {
     try {
       const isSuccess = status === 'success';
       
-      // Update payments table with PhonePe response
+      // Get payment ID
+      const { data: payment } = await supabaseAdmin
+        .from('payments')
+        .select('id')
+        .eq('merchant_transaction_id', merchantId)
+        .single();
+
+      // Update payments table
       await supabaseAdmin
         .from('payments')
         .update({
           payment_status: isSuccess ? 'success' : 'failed',
           paid_at: isSuccess ? new Date().toISOString() : null,
-          gateway_response_snapshot: phonePeResult, // Store the full PhonePe response
+          gateway_response_snapshot: phonePeResult,
           transaction_id: phonePeResult?.paymentDetails?.[0]?.transactionId || merchantId,
         })
         .eq('merchant_transaction_id', merchantId);
@@ -264,7 +288,7 @@ export default function PaymentConfirmation() {
         })
         .eq('id', orderId);
 
-      // Add status history
+      // ✅ Save to order_status_history table
       await supabaseAdmin
         .from('order_status_history')
         .insert({
@@ -283,7 +307,7 @@ export default function PaymentConfirmation() {
     }
   };
 
-  const generateInvoice = async (orderId: string) => {
+  const generateAndSaveInvoice = async (orderId: string, phonePeResult: any) => {
     try {
       // Check if invoice already exists
       const { data: existingInvoice } = await supabaseAdmin
@@ -294,6 +318,7 @@ export default function PaymentConfirmation() {
 
       if (existingInvoice) {
         setInvoiceData(existingInvoice);
+        toast.info('Invoice already exists');
         return;
       }
 
@@ -315,7 +340,7 @@ export default function PaymentConfirmation() {
 
       const { data: payments } = await supabaseAdmin
         .from('payments')
-        .select('payment_gateway, payment_mode, payment_status, transaction_id')
+        .select('payment_gateway, payment_mode, payment_status, transaction_id, gateway_response_snapshot')
         .eq('order_id', orderId);
 
       const { data: outlet } = await supabaseAdmin
@@ -331,6 +356,7 @@ export default function PaymentConfirmation() {
         email: ''
       };
 
+      // Generate PDF
       const blob = await buildPdfBlob({ 
         order, 
         items: items || [], 
@@ -341,15 +367,27 @@ export default function PaymentConfirmation() {
         invoiceNumber 
       });
       
+      // Upload to S3 (Supabase Storage)
       const path = `${orderId}/${invoiceNumber}.pdf`;
-      await supabase.storage.from(BUCKET).upload(path, blob, { 
-        contentType: "application/pdf", 
-        upsert: true 
-      });
+      const { error: uploadError } = await supabase.storage
+        .from(BUCKET)
+        .upload(path, blob, { 
+          contentType: "application/pdf", 
+          upsert: true 
+        });
       
-      const { data: pubData } = supabase.storage.from(BUCKET).getPublicUrl(path);
+      if (uploadError) {
+        console.error('Upload error:', uploadError);
+        throw new Error('Failed to upload invoice to storage');
+      }
+      
+      // Get public URL
+      const { data: pubData } = supabase.storage
+        .from(BUCKET)
+        .getPublicUrl(path);
 
-      const { data: invoiceRecord } = await supabaseAdmin
+      // ✅ Save invoice record to database
+      const { data: invoiceRecord, error: invoiceError } = await supabaseAdmin
         .from('invoices')
         .insert({
           order_id: orderId,
@@ -364,11 +402,17 @@ export default function PaymentConfirmation() {
         .select()
         .single();
 
+      if (invoiceError) {
+        console.error('Invoice save error:', invoiceError);
+        throw new Error('Failed to save invoice record');
+      }
+
       setInvoiceData(invoiceRecord);
-      toast.success('Invoice generated successfully!');
+      toast.success('Invoice generated and saved successfully!');
+
     } catch (error) {
       console.error('Error generating invoice:', error);
-      toast.error('Failed to generate invoice');
+      toast.error('Failed to generate invoice: ' + (error as Error).message);
     }
   };
 
@@ -387,6 +431,11 @@ export default function PaymentConfirmation() {
 
       if (error) throw error;
       setOrderDetails(order);
+      
+      if (order.invoices && order.invoices.length > 0) {
+        setInvoiceData(order.invoices[0]);
+      }
+      
       return order;
     } catch (error) {
       console.error('Error fetching order details:', error);
@@ -394,7 +443,7 @@ export default function PaymentConfirmation() {
     }
   };
 
-  const startPolling = (orderId: string, merchantId: string) => {
+  const startPolling = (orderId: string, merchantId: string, paymentId: string) => {
     let attempts = 0;
     const maxAttempts = 20;
     setIsPolling(true);
@@ -404,15 +453,16 @@ export default function PaymentConfirmation() {
       setPollingAttempts(attempts);
 
       try {
-        // Call PhonePe Edge Function for status
         const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
           action: 'status',
           merchantOrderId: merchantId
         });
 
         if (response.data) {
-          setPhonePeResponse(response.data);
           const result = response.data;
+          setPhonePeResponse(result);
+          
+          await savePhonePeResponse(orderId, paymentId, result);
           
           const isSuccess = 
             result.state === 'COMPLETED' || 
@@ -430,7 +480,7 @@ export default function PaymentConfirmation() {
             await updateOrderStatus(orderId, 'success', merchantId, result);
             setStatus('success');
             setIsPolling(false);
-            await generateInvoice(orderId);
+            await generateAndSaveInvoice(orderId, result);
             await fetchOrderDetails(orderId);
             toast.success('Payment confirmed!');
             clearInterval(interval);
@@ -549,6 +599,19 @@ export default function PaymentConfirmation() {
                       <span className="text-muted-foreground">Invoice</span>
                       <span className="font-semibold text-blue-600">{invoiceData.invoice_number}</span>
                     </div>
+                    {invoiceData.invoice_url && (
+                      <div className="mt-1 flex justify-between text-xs">
+                        <span className="text-muted-foreground">URL</span>
+                        <a 
+                          href={invoiceData.invoice_url} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-blue-500 hover:underline truncate max-w-[200px]"
+                        >
+                          {invoiceData.invoice_url}
+                        </a>
+                      </div>
+                    )}
                   </div>
                 )}
                 {phonePeResponse && (
