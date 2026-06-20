@@ -176,24 +176,6 @@ export default function PaymentConfirmation() {
     try {
       setLoading(true);
       
-      // FIRST: Check if order already has a successful status
-      const { data: existingOrder } = await supabaseAdmin
-        .from('orders')
-        .select('payment_status, order_status')
-        .eq('id', orderId)
-        .single();
-
-      // If already paid/successful, skip the API call
-      if (existingOrder?.payment_status === 'paid' || existingOrder?.order_status === 'received') {
-        console.log('Order already marked as paid/received');
-        setStatus('success');
-        await fetchOrderDetails(orderId);
-        await generateAndSaveInvoice(orderId, null);
-        setLoading(false);
-        toast.success('Payment already confirmed!');
-        return;
-      }
-      
       // Step 1: Get merchant transaction ID from database
       const { data: payment, error: paymentError } = await supabaseAdmin
         .from('payments')
@@ -269,7 +251,6 @@ export default function PaymentConfirmation() {
     } catch (error: any) {
       console.error('Error checking PhonePe status:', error);
       
-      // Check if order already has a success status
       const { data: order } = await supabaseAdmin
         .from('orders')
         .select('payment_status, order_status')
@@ -317,19 +298,14 @@ export default function PaymentConfirmation() {
       console.log('Updating order status to:', isSuccess ? 'success' : 'failed');
       
       // Get payment ID
-      const { data: payment, error: paymentFetchError } = await supabaseAdmin
+      const { data: payment } = await supabaseAdmin
         .from('payments')
         .select('id')
         .eq('merchant_transaction_id', merchantId)
         .single();
 
-      if (paymentFetchError) {
-        console.error('Error fetching payment:', paymentFetchError);
-        throw new Error('Payment record not found');
-      }
-
       // Update payments table
-      const { error: paymentUpdateError } = await supabaseAdmin
+      await supabaseAdmin
         .from('payments')
         .update({
           payment_status: isSuccess ? 'success' : 'failed',
@@ -339,42 +315,25 @@ export default function PaymentConfirmation() {
         })
         .eq('merchant_transaction_id', merchantId);
 
-      if (paymentUpdateError) {
-        console.error('Error updating payment:', paymentUpdateError);
-        throw new Error('Failed to update payment record');
-      }
-
-      // ✅ CRITICAL FIX: Update orders table with correct statuses
-      const orderUpdateData = {
-        payment_status: isSuccess ? 'paid' : 'failed',
-        order_status: isSuccess ? 'received' : 'payment_failed',
-        last_updated_by: 'system',
-        updated_at: new Date().toISOString(),
-      };
-
-      console.log('Updating order with:', orderUpdateData);
-
-      const { data: updatedOrder, error: orderUpdateError } = await supabaseAdmin
+      // Update orders table
+      await supabaseAdmin
         .from('orders')
-        .update(orderUpdateData)
-        .eq('id', orderId)
-        .select()
-        .single();
-
-      if (orderUpdateError) {
-        console.error('Error updating order:', orderUpdateError);
-        throw new Error('Failed to update order record');
-      }
+        .update({
+          payment_status: isSuccess ? 'paid' : 'failed',
+          order_status: isSuccess ? 'received' : 'payment_failed',
+          last_updated_by: 'system',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', orderId);
 
       console.log('Order updated successfully:', {
         orderId,
-        payment_status: orderUpdateData.payment_status,
-        order_status: orderUpdateData.order_status,
-        updatedOrder
+        payment_status: isSuccess ? 'paid' : 'failed',
+        order_status: isSuccess ? 'received' : 'payment_failed'
       });
 
-      // ✅ Add status history with all fields
-      const { error: historyError } = await supabaseAdmin
+      // ✅ Add status history with all fields including ip_address
+      await supabaseAdmin
         .from('order_status_history')
         .insert({
           order_id: orderId,
@@ -383,18 +342,11 @@ export default function PaymentConfirmation() {
           remarks: isSuccess ? 'Payment confirmed via PhonePe' : 'Payment failed',
           changed_by: 'system',
           changed_by_role: 'system',
-          ip_address: null,
+          ip_address: null, // You can get client IP if needed
           created_at: new Date().toISOString()
         });
 
-      if (historyError) {
-        console.error('Error adding status history:', historyError);
-        // Don't throw here, as the order update was successful
-      }
-
       toast.success(isSuccess ? 'Payment status updated successfully!' : 'Payment status updated.');
-      return updatedOrder;
-      
     } catch (error) {
       console.error('Error updating order status:', error);
       toast.error('Failed to update payment status: ' + (error as Error).message);
