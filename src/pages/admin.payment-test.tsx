@@ -1,54 +1,133 @@
-import { useNavigate } from "react-router-dom";
-import { useServerFn } from "@/lib/react-start-mock";
-import { useMemo, useState, useEffect } from "react";
-import { toast } from "sonner";
-import { AdminLayout } from "@/components/admin/AdminLayout";
-import { AdminHeader, AdminPage } from "@/components/admin/AdminShell";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2 } from "lucide-react";
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import { supabaseAdmin } from '@/integrations/supabase/client.server';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+
+import { useServerFn } from '@/lib/react-start-mock';
+import { AdminLayout } from '@/components/admin/AdminLayout';
+import { AdminHeader, AdminPage } from '@/components/admin/AdminShell';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Plus, Minus, Trash2, Search, Printer, CheckCircle2, Smartphone, Banknote, CreditCard, AlertTriangle, Loader2, FileText } from 'lucide-react';
 import {
   listWalkinOutlets,
   listWalkinMenu,
-  createWalkinOrder,
-  confirmCounterPayment,
-  verifyWalkinUpi,
-} from "@/lib/admin-walkin.functions";
+} from '@/lib/admin-walkin.functions';
 
-type CartLine = {
-  variantId: string;
-  itemId: string;
-  itemName: string;
-  variantName: string;
-  unitPrice: number;
-  quantity: number;
-};
-type PayMode = "cash" | "card_machine" | "upi";
+const API_PATH = 'https://u18pdq88oa.execute-api.ap-south-1.amazonaws.com/';
+const BUCKET = 'invoices';
 
-type PlacedOrder = {
-  orderId: string;
-  orderNumber: string;
-  paymentMode: PayMode;
-  redirectUrl?: string;
-  status: "awaiting_collection" | "awaiting_upi" | "upi_pending" | "paid" | "upi_failed";
-  invoiceId?: string;
-};
+function fmt(n: number) { 
+  return '₹' + Number(n || 0).toLocaleString('en-IN'); 
+}
 
-function AdminPaymentTest() {
+async function buildPdfBlob(args: any) {
+  const { order, items, addons, payments, customer, outlet, invoiceNumber } = args;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  
+  doc.setFontSize(18); 
+  doc.text('Telugu Food Club', 40, 50);
+  doc.setFontSize(10); 
+  doc.text(outlet?.outlet_name ?? '', 40, 66);
+  doc.text(`${outlet?.address ?? ''} ${outlet?.city ?? ''}`, 40, 80);
+  doc.text(`Phone: ${outlet?.phone ?? ''}`, 40, 94);
+  
+  doc.setFontSize(14); 
+  doc.text('TAX INVOICE', 400, 50);
+  doc.setFontSize(10);
+  doc.text(`Invoice #: ${invoiceNumber}`, 400, 66);
+  doc.text(`Date: ${new Date().toLocaleString()}`, 400, 80);
+  doc.text(`Order #: ${order.order_number || order.id.slice(0, 8)}`, 400, 94);
+
+  doc.setFontSize(11); 
+  doc.text('Bill To', 40, 120);
+  doc.setFontSize(10);
+  doc.text(customer?.full_name || customer?.name || 'Guest', 40, 136);
+  doc.text(customer?.phone || '', 40, 150);
+  doc.text(customer?.email || '', 40, 164);
+
+  const addonByItem = new Map();
+  (addons || []).forEach((a: any) => {
+    const arr = addonByItem.get(a.order_item_id) ?? [];
+    arr.push(a); 
+    addonByItem.set(a.order_item_id, arr);
+  });
+
+  const rows = (items || []).flatMap((it: any) => {
+    const base = [
+      it.item_name_snapshot + (it.variant_name_snapshot ? ` — ${it.variant_name_snapshot}` : ''),
+      String(it.quantity),
+      fmt(it.unit_price_snapshot || it.price || 0),
+      fmt(it.total_price || (it.price * it.quantity) || 0)
+    ];
+    const adds = (addonByItem.get(it.id) ?? []).map((a: any) => [
+      `  + ${a.addon_name_snapshot}`,
+      String(a.quantity),
+      fmt(a.price_snapshot || a.price || 0),
+      fmt((a.price_snapshot || a.price || 0) * (a.quantity || 1))
+    ]);
+    return [base, ...adds];
+  });
+
+  autoTable(doc, {
+    startY: 190,
+    head: [['Item', 'Qty', 'Rate', 'Total']],
+    body: rows,
+    styles: { fontSize: 9 },
+    headStyles: { fillColor: [184, 71, 28] },
+  });
+
+  const endY = (doc as any).lastAutoTable.finalY + 20;
+  
+  const lines = [
+    ['Subtotal', fmt(order.subtotal || 0)],
+    ['Tax', fmt(order.tax_amount || 0)],
+    ['Grand Total', fmt(order.grand_total || 0)],
+  ];
+  
+  lines.forEach(([k, v], i) => {
+    doc.setFontSize(i === lines.length - 1 ? 12 : 10);
+    doc.text(k, 380, endY + i * 16);
+    doc.text(v, 540, endY + i * 16, { align: 'right' });
+  });
+
+  const paid = (payments || []).find((p: any) => p.payment_status === 'success');
+  if (paid) {
+    doc.setFontSize(10); 
+    doc.setTextColor(0, 120, 0);
+    doc.text(
+      `PAID via ${paid.payment_gateway}${paid.payment_mode ? ' · ' + paid.payment_mode : ''}${paid.transaction_id ? '  TXN ' + paid.transaction_id : ''}`, 
+      40, 
+      endY + lines.length * 16 + 24
+    );
+    doc.setTextColor(0, 0, 0);
+  }
+
+  doc.setFontSize(9);
+  doc.text('Thank you for your business!', 40, 800);
+  doc.text('This is a system generated invoice.', 40, 814);
+  
+  return doc.output('blob');
+}
+
+export default function AdminPaymentTest() {
   const navigate = useNavigate();
   const outletsFn = useServerFn(listWalkinOutlets);
   const menuFn = useServerFn(listWalkinMenu);
-  const createFn = useServerFn(createWalkinOrder);
-  const confirmFn = useServerFn(confirmCounterPayment);
-  const verifyFn = useServerFn(verifyWalkinUpi);
 
   const [outletsData, setOutletsData] = useState<any>(null);
   const [outletsLoading, setOutletsLoading] = useState(true);
 
   const [menuData, setMenuData] = useState<any>(null);
   const [menuLoading, setMenuLoading] = useState(true);
-  const [menuError, setMenuError] = useState<Error | null>(null);
+  const [menuError, setMenuError] = useState<any>(null);
+
+  const [adminId, setAdminId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -57,18 +136,25 @@ function AdminPaymentTest() {
       try {
         const res = await outletsFn();
         if (active) setOutletsData(res);
-      } catch (err: any) {
-        // ignore err
+      } catch (err) {
       } finally {
         if (active) setOutletsLoading(false);
       }
     };
     fetchOutlets();
+    const getAdminId = async () => {
+      try {
+        const { data: { user } } = await supabaseAdmin.auth.getUser();
+        if (user) setAdminId(user.id);
+      } catch (error) {}
+    };
+    getAdminId();
     return () => { active = false; };
   }, [outletsFn]);
 
-  const [outletId, setOutletId] = useState<string>("");
-  const effectiveOutletId = outletId || outletsData?.defaultOutletId || outletsData?.outlets[0]?.id || "";
+  const [outletId, setOutletId] = useState('');
+  const effectiveOutletId = outletId || outletsData?.defaultOutletId || outletsData?.outlets[0]?.id || '';
+  const branch = outletsData?.outlets?.find((o: any) => o.id === effectiveOutletId)?.name || 'Default Branch';
 
   useEffect(() => {
     let active = true;
@@ -79,7 +165,7 @@ function AdminPaymentTest() {
       try {
         const res = await menuFn({ data: { outletId: effectiveOutletId } });
         if (active) setMenuData(res);
-      } catch (err: any) {
+      } catch (err) {
         if (active) setMenuError(err);
       } finally {
         if (active) setMenuLoading(false);
@@ -89,19 +175,31 @@ function AdminPaymentTest() {
     return () => { active = false; };
   }, [effectiveOutletId, menuFn]);
 
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState<string>("");
-  const [cart, setCart] = useState<CartLine[]>([]);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [table, setTable] = useState("");
-  const [notes, setNotes] = useState("");
-  const [paymentMode, setPaymentMode] = useState<PayMode>("cash");
-  const [taxPct, setTaxPct] = useState<number>(5);
-  const [discount, setDiscount] = useState<number>(0);
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
+  const [cart, setCart] = useState<any[]>([]);
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [table, setTable] = useState('');
+  const [notes, setNotes] = useState('');
+  const [paymentMode, setPaymentMode] = useState('cash');
+  const [taxPct, setTaxPct] = useState(5);
+  const [discount, setDiscount] = useState(0);
 
-  const [placed, setPlaced] = useState<PlacedOrder | null>(null);
+  // Original payment-test state
+  const [loading, setLoading] = useState(false);
+  const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
+  const [invoiceData, setInvoiceData] = useState<any>(null);
+  const [verifyingPayment, setVerifyingPayment] = useState(false);
   const [verificationAttempts, setVerificationAttempts] = useState(0);
+  const [phonePeWindow, setPhonePeWindow] = useState<any>(null);
+  const [showRetryButton, setShowRetryButton] = useState(false);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const [showPaymentChannel, setShowPaymentChannel] = useState(false);
+  const [paymentChannelUrl, setPaymentChannelUrl] = useState<string | null>(null);
+
+  const pollIntervalRef = useRef<any>(null);
+  const timeoutRef = useRef<any>(null);
 
   const items = menuData?.items ?? [];
   const categories = menuData?.categories ?? [];
@@ -115,7 +213,7 @@ function AdminPaymentTest() {
     });
   }, [items, search, category]);
 
-  function addLine(item: typeof items[number], variant: typeof items[number]["variants"][number]) {
+  function addLine(item: any, variant: any) {
     setCart((c) => {
       const idx = c.findIndex((l) => l.variantId === variant.id);
       if (idx >= 0) {
@@ -146,9 +244,14 @@ function AdminPaymentTest() {
     setCart((c) => c.filter((l) => l.variantId !== variantId));
   }
   function resetCart() {
-    setCart([]); setName(""); setPhone(""); setTable(""); setNotes("");
-    setDiscount(0); setPlaced(null); setPaymentMode("cash");
-    setVerificationAttempts(0);
+    setCart([]); setName(''); setPhone(''); setTable(''); setNotes('');
+    setDiscount(0); setPaymentMode('cash');
+    stopPolling();
+    setCurrentOrderId(null);
+    setInvoiceData(null);
+    setPaymentConfirmed(false);
+    setShowPaymentChannel(false);
+    setShowRetryButton(false);
   }
 
   const subtotal = cart.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
@@ -156,168 +259,415 @@ function AdminPaymentTest() {
   const tax = Math.round(taxable * ((Number(taxPct) || 0) / 100) * 100) / 100;
   const grand = Math.round((taxable + tax) * 100) / 100;
 
-  const [isPlacing, setIsPlacing] = useState(false);
-  const handlePlaceOrder = async () => {
-    // Validate phone number if UPI
-    if (paymentMode === "upi") {
-      const phoneNumber = phone.trim();
-      if (!phoneNumber || phoneNumber.length !== 10) {
-        toast.error("Please enter a valid 10-digit phone number");
-        return;
-      }
-    }
+  // ---------------- PAYMENT LOGIC FROM PAYMENT-TEST ----------------
 
-    if (!cart.length) {
-      toast.error("Please add items to cart");
-      return;
-    }
-
-    if (!effectiveOutletId) {
-      toast.error("Please select an outlet");
-      return;
-    }
-
-    setIsPlacing(true);
-    setVerificationAttempts(0);
-    try {
-      const res = await createFn({
-        data: {
-          outletId: effectiveOutletId,
-          items: cart,
-          walkInName: name || null,
-          walkInPhone: phone || null,
-          tableNumber: table || null,
-          paymentMode,
-          discountAmount: Number(discount) || 0,
-          taxPercent: Number(taxPct) || 0,
-          notes: notes || null,
-        },
-      });
-      toast.success(`Order ${res.orderNumber} placed`);
-      
-      setPlaced({
-        orderId: res.orderId,
-        orderNumber: res.orderNumber,
-        paymentMode: res.paymentMode,
-        redirectUrl: res.redirectUrl,
-        status: res.paymentMode === "upi" ? "awaiting_upi" : "awaiting_collection",
-      });
-
-      if (res.paymentMode === "upi" && res.redirectUrl) {
-        window.open(res.redirectUrl, "_blank", "noopener,noreferrer");
-        toast.success("PhonePe checkout opened!");
-      }
-
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to place order");
-    } finally {
-      setIsPlacing(false);
-    }
-  };
-
-  const [isCollecting, setIsCollecting] = useState(false);
-  const handleCollect = async () => {
-    setIsCollecting(true);
-    try {
-      const res = await confirmFn({
-        data: {
-          orderId: placed!.orderId,
-          mode: placed!.paymentMode === "cash" ? "cash" : "card_machine",
-        },
-      });
-      toast.success("Payment collected, invoice generated");
-      setPlaced((p) => (p ? { ...p, status: "paid", invoiceId: res.invoiceId } : p));
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to confirm payment");
-    } finally {
-      setIsCollecting(false);
-    }
-  };
-
-  const [isVerifying, setIsVerifying] = useState(false);
-  const handleVerify = async (isManual = true) => {
-    if (isManual) setIsVerifying(true);
-    try {
-      const res = await verifyFn({ data: { orderId: placed!.orderId } });
-      if (res.paymentStatus === "success") {
-        toast.success("UPI payment verified");
-        setPlaced((p) => (p ? { ...p, status: "paid" } : p));
-        return true;
-      } else if (res.paymentStatus === "failed") {
-        if (isManual) toast.error("Payment failed");
-        setPlaced((p) => (p ? { ...p, status: "upi_failed" } : p));
-        return false;
-      } else {
-        if (isManual) toast.message("Still pending — retry verify after customer pays");
-        setPlaced((p) => (p ? { ...p, status: "upi_pending" } : p));
-        return false;
-      }
-    } catch (e: any) {
-      if (isManual) toast.error(e?.message ?? "Verification failed");
-      return false;
-    } finally {
-      if (isManual) setIsVerifying(false);
-    }
-  };
-
-  // Automated Polling Logic
   useEffect(() => {
-    if (!placed || (placed.status !== "awaiting_upi" && placed.status !== "upi_pending")) {
-      return;
-    }
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (phonePeWindow && !phonePeWindow.closed) phonePeWindow.close();
+    };
+  }, [phonePeWindow]);
 
-    let pollCount = verificationAttempts;
-    const maxPolls = 30; // 5 minutes (30 * 10s)
-    
-    const interval = setInterval(async () => {
-      pollCount++;
-      setVerificationAttempts(pollCount);
+  const saveOrderToSupabase = async (paymentResponse?: any) => {
+    try {
+      const { data: order, error: orderError } = await supabaseAdmin
+        .from("orders")
+        .insert({
+          customer_id: null,
+          outlet_id: effectiveOutletId,
+          order_type: 'dine_in',
+          order_status: 'pending_payment',
+          payment_status: 'pending',
+          subtotal: subtotal,
+          tax_amount: tax,
+          delivery_charge: 0,
+          discount_amount: discount,
+          grand_total: grand,
+          customer_notes: notes || null,
+          created_by: adminId,
+          last_updated_by: adminId,
+          is_walk_in: true,
+          walk_in_customer_name: name || null,
+          walk_in_customer_phone: phone || null,
+          table_number: table || null,
+        })
+        .select("id, order_number, created_at")
+        .single();
+
+      if (orderError) throw new Error('Failed to create order: ' + orderError.message);
+      setCurrentOrderId(order.id);
+
+      const orderItems = cart.map(item => ({
+        order_id: order.id,
+        item_id: item.itemId,
+        variant_id: item.variantId,
+        item_name_snapshot: item.itemName,
+        variant_name_snapshot: item.variantName,
+        unit_price_snapshot: item.unitPrice,
+        quantity: item.quantity,
+        total_price: item.unitPrice * item.quantity,
+        special_instructions: null
+      }));
+
+      const { error: itemsError } = await supabaseAdmin.from("order_items").insert(orderItems);
+      if (itemsError) throw new Error('Failed to create order items: ' + itemsError.message);
+
+      const merchantTransactionId = `PHONEPE-${order.order_number}-${Date.now()}`;
       
-      if (pollCount > maxPolls) {
-        clearInterval(interval);
-        toast.error("Payment verification timed out. Please verify manually.");
-        return;
-      }
-      
-      const success = await handleVerify(false);
-      if (success || placed?.status === "upi_failed") {
-        clearInterval(interval);
-      }
-    }, 10000);
+      const pMode = paymentMode === 'upi' ? 'upi' : paymentMode === 'card_machine' ? 'card' : 'cash';
+      const pg = paymentMode === 'upi' ? 'phonepe' : paymentMode;
 
-    return () => clearInterval(interval);
-  }, [placed?.status, placed?.orderId]);
+      const { data: payment, error: paymentError } = await supabaseAdmin
+        .from("payments")
+        .insert({
+          order_id: order.id,
+          payment_gateway: pg,
+          payment_mode: pMode,
+          payment_status: paymentMode === 'cash' ? 'success' : 'initiated',
+          amount: grand,
+          transaction_id: paymentResponse?.transactionId || merchantTransactionId,
+          merchant_transaction_id: merchantTransactionId,
+          gateway_response_snapshot: paymentResponse || null,
+        })
+        .select("id")
+        .single();
 
-  const [isMockPayment, setIsMockPayment] = useState(false);
-  const handleMockPaymentSuccess = () => {
-    // Fallback for testing when PhonePe API is not working
-    if (placed && placed.paymentMode === "upi") {
-      setPlaced({
-        ...placed,
-        status: "paid"
+      if (paymentError) throw new Error('Failed to create payment record: ' + paymentError.message);
+
+      await supabaseAdmin.from("order_status_history").insert({
+        order_id: order.id,
+        old_status: null,
+        new_status: 'pending_payment',
+        remarks: `Order created via ${paymentMode} payment.`,
+        changed_by: adminId,
+        changed_by_role: 'admin',
       });
-      toast.success("✅ Payment successful (demo mode)");
-    } else {
-      toast.error("No active UPI order to complete");
+
+      return { order, payment, merchantTransactionId };
+    } catch (error) {
+      console.error('Error saving order:', error);
+      throw error;
     }
   };
 
-  const printDisabled = !placed || placed.status !== "paid";
+  const checkPaymentStatusFromDB = async (orderId: string) => {
+    try {
+      const { data: order } = await supabaseAdmin
+        .from("orders")
+        .select("payment_status, order_status, grand_total, subtotal, tax_amount")
+        .eq("id", orderId)
+        .single();
+      return order;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const updatePaymentStatus = async (orderId: string, paymentId: string | null, status: string, transactionId: string) => {
+    try {
+      if (paymentId) {
+        await supabaseAdmin.from("payments").update({
+          payment_status: status,
+          paid_at: status === 'success' ? new Date().toISOString() : null,
+          transaction_id: transactionId,
+        }).eq("id", paymentId);
+      }
+
+      await supabaseAdmin.from("orders").update({
+        payment_status: status === 'success' ? 'paid' : 'failed',
+        order_status: status === 'success' ? 'received' : 'payment_failed',
+        last_updated_by: adminId,
+      }).eq("id", orderId);
+
+      await supabaseAdmin.from("order_status_history").insert({
+        order_id: orderId,
+        old_status: 'pending_payment',
+        new_status: status === 'success' ? 'received' : 'payment_failed',
+        remarks: status === 'success' ? 'Payment successful' : 'Payment failed',
+        changed_by: adminId,
+        changed_by_role: 'admin',
+      });
+
+      if (status === 'success') {
+        await generateAndSaveInvoice(orderId);
+      }
+      return { success: true };
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const generateAndSaveInvoice = async (orderId: string) => {
+    try {
+      const { data: order } = await supabaseAdmin.from("orders")
+        .select(`id, order_number, created_at, subtotal, tax_amount, grand_total, walk_in_customer_name, walk_in_customer_phone, order_type, table_number, customer_notes`)
+        .eq("id", orderId).single();
+
+      const { data: items } = await supabaseAdmin.from("order_items")
+        .select(`id, item_name_snapshot, variant_name_snapshot, quantity, unit_price_snapshot, total_price`)
+        .eq("order_id", orderId);
+
+      const { data: payments } = await supabaseAdmin.from("payments")
+        .select("payment_gateway, payment_mode, payment_status, transaction_id")
+        .eq("order_id", orderId);
+
+      const { data: outlet } = await supabaseAdmin.from("outlets")
+        .select("outlet_name, address, city, state, phone, outlet_code")
+        .eq("id", effectiveOutletId).single();
+
+      const invoiceNumber = `INV-${order.order_number || orderId.slice(0, 8)}-${Date.now().toString().slice(-6)}`;
+      const customer = {
+        full_name: order.walk_in_customer_name || name || 'Guest',
+        phone: order.walk_in_customer_phone || phone || '',
+        email: ''
+      };
+
+      const blob = await buildPdfBlob({ order, items: items || [], addons: [], payments: payments || [], customer, outlet, invoiceNumber });
+      
+      const path = `${orderId}/${invoiceNumber}.pdf`;
+      await supabase.storage.from(BUCKET).upload(path, blob, { contentType: "application/pdf", upsert: true });
+      const { data: pubData } = supabase.storage.from(BUCKET).getPublicUrl(path);
+
+      const { data: invoiceRecord } = await supabaseAdmin.from("invoices").insert({
+        order_id: orderId,
+        invoice_number: invoiceNumber,
+        invoice_url: pubData.publicUrl,
+        invoice_amount: Number(order.grand_total),
+        tax_amount: Number(order.tax_amount),
+        generated_by: adminId || 'system',
+        is_void: false,
+        generated_at: new Date().toISOString()
+      }).select().single();
+
+      setInvoiceData({
+        id: invoiceRecord.id,
+        invoiceNumber: invoiceRecord.invoice_number || invoiceNumber,
+        orderNumber: order.order_number || orderId.slice(0, 8),
+        invoiceUrl: pubData.publicUrl,
+      });
+      toast.success(`Invoice generated successfully!`);
+      return { success: true, invoiceNumber: invoiceRecord.invoice_number || invoiceNumber };
+    } catch (error) {
+      toast.error('Failed to generate invoice');
+      throw error;
+    }
+  };
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
+
+  const verifyPhonePePayment = async (orderId: string, isManual = false) => {
+    try {
+      if (!isManual) {
+        setVerifyingPayment(true);
+        setVerificationAttempts(prev => prev + 1);
+      }
+      
+      const orderStatus = await checkPaymentStatusFromDB(orderId);
+      if (orderStatus && orderStatus.payment_status === 'paid') {
+        if (!invoiceData) await generateAndSaveInvoice(orderId);
+        setPaymentConfirmed(true);
+        setVerifyingPayment(false);
+        stopPolling();
+        setShowPaymentChannel(false);
+        return { success: true, alreadyPaid: true };
+      }
+
+      const response = await axios.post(`${API_PATH}api/admin/phonepe/verify`, { orderId: orderId });
+
+      if (response.data) {
+        if (response.data.paymentStatus === 'success') {
+          stopPolling();
+          await updatePaymentStatus(orderId, null, 'success', `VERIFIED-${Date.now()}`);
+          setPaymentConfirmed(true);
+          setVerifyingPayment(false);
+          setShowPaymentChannel(false);
+          toast.success(`Payment successful!`);
+          if (phonePeWindow && !phonePeWindow.closed) {
+            phonePeWindow.close();
+            setPhonePeWindow(null);
+          }
+          return { success: true };
+        } else if (response.data.paymentStatus === 'failed') {
+          stopPolling();
+          setVerifyingPayment(false);
+          toast.error('Payment failed.');
+          setShowRetryButton(true);
+          return { success: false, status: 'failed' };
+        } else {
+          return { success: false, status: 'pending' };
+        }
+      }
+      return { success: false, status: 'pending' };
+    } catch (error: any) {
+      setVerifyingPayment(false);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const processPayment = async () => {
+    if (!cart.length) { toast.error('Cart is empty'); return; }
+    if (paymentMode === 'upi' && (!phone || phone.length !== 10)) { toast.error('Valid phone number required for UPI'); return; }
+    if (!effectiveOutletId) { toast.error('Outlet required'); return; }
+
+    setLoading(true);
+    setShowRetryButton(false);
+    setVerificationAttempts(0);
+    setPaymentConfirmed(false);
+    setShowPaymentChannel(false);
+    
+    try {
+      const { order, payment, merchantTransactionId } = await saveOrderToSupabase();
+      
+      if (paymentMode === 'cash' || paymentMode === 'card_machine') {
+        await updatePaymentStatus(order.id, payment.id, 'success', `${paymentMode.toUpperCase()}-${Date.now()}`);
+        setPaymentConfirmed(true);
+        toast.success(`${paymentMode} payment successful!`);
+        setLoading(false);
+        return;
+      }
+
+      if (!paymentConfirmed && paymentMode === 'upi') {
+        const orderItems = cart.map(item => ({
+          item_id: item.itemId,
+          title: item.itemName,
+          description: item.variantName || '',
+          price: item.unitPrice,
+          quantity: item.quantity,
+          variant: item.variantName || 'Regular'
+        }));
+
+        const payload = {
+          mobilenumber: phone,
+          customer_name: name || 'Guest',
+          total_amount: grand,
+          order_status: 'PENDING',
+          order_items: orderItems,
+          order_type: `Online-${branch}`,
+          restaurant_id: 1,
+          payment_status: 'PENDING',
+          order_id: order.id
+        };
+
+        const response = await axios.post(`${API_PATH}api/admin/phonepay/order`, payload);
+
+        if (response.status === 200 && response.data.result) {
+          await updatePaymentStatus(order.id, payment.id, 'pending', response.data.result.transactionId || merchantTransactionId);
+
+          const channelUrl = response.data.result.redirectUrl;
+          setPaymentChannelUrl(channelUrl);
+          setShowPaymentChannel(true);
+          toast.success('Payment initiated!');
+          
+          if (channelUrl) {
+            const newWindow = window.open(channelUrl, '_blank');
+            setPhonePeWindow(newWindow);
+          }
+
+          let pollCount = 0;
+          const maxPolls = 30;
+          stopPolling();
+          
+          pollIntervalRef.current = setInterval(async () => {
+            pollCount++;
+            setVerificationAttempts(pollCount);
+            if (pollCount > maxPolls) {
+              stopPolling();
+              setVerifyingPayment(false);
+              setLoading(false);
+              setShowRetryButton(true);
+              toast.error('Payment verification timed out.');
+              return;
+            }
+
+            const dbStatus = await checkPaymentStatusFromDB(order.id);
+            if (dbStatus && dbStatus.payment_status === 'paid') {
+              if (!invoiceData) await generateAndSaveInvoice(order.id);
+              setPaymentConfirmed(true);
+              setVerifyingPayment(false);
+              setLoading(false);
+              setShowPaymentChannel(false);
+              stopPolling();
+              if (phonePeWindow && !phonePeWindow.closed) { phonePeWindow.close(); setPhonePeWindow(null); }
+              return;
+            }
+
+            const verificationResult = await verifyPhonePePayment(order.id);
+            if (verificationResult.success) {
+              setLoading(false);
+            } else if (verificationResult.status === 'failed') {
+              setLoading(false);
+              setShowRetryButton(true);
+            }
+          }, 10000);
+
+          timeoutRef.current = setTimeout(() => {
+            stopPolling();
+            setVerifyingPayment(false);
+            setLoading(false);
+            setShowRetryButton(true);
+          }, 300000);
+        } else {
+          await updatePaymentStatus(order.id, payment.id, 'failed', merchantTransactionId);
+          toast.error('Payment initiation failed.');
+          setLoading(false);
+        }
+      }
+    } catch (error: any) {
+      toast.error('Payment failed. ' + (error.response?.data?.message || error.message));
+      setLoading(false);
+      setShowRetryButton(true);
+    }
+  };
+
+  const handleRetryVerification = async () => {
+    if (!currentOrderId) return;
+    setShowRetryButton(false);
+    setVerifyingPayment(true);
+    const dbStatus = await checkPaymentStatusFromDB(currentOrderId);
+    if (dbStatus && dbStatus.payment_status === 'paid') {
+      if (!invoiceData) await generateAndSaveInvoice(currentOrderId);
+      setPaymentConfirmed(true);
+      setVerifyingPayment(false);
+      setShowPaymentChannel(false);
+      return;
+    }
+    const result = await verifyPhonePePayment(currentOrderId, true);
+    if (result.success) {
+      setPaymentConfirmed(true);
+      setVerifyingPayment(false);
+      setShowPaymentChannel(false);
+    } else if (result.status === 'failed') {
+      setVerifyingPayment(false);
+      setShowRetryButton(true);
+    } else {
+      setVerifyingPayment(false);
+      setShowRetryButton(true);
+    }
+  };
+
+  // ---------------- UI RENDER ----------------
 
   return (
     <AdminPage>
-      <AdminHeader title="Payment Test (Walk-in UI)" subtitle="Walk-in checkout flow with automated PhonePe polling" />
+      <AdminHeader title="Payment Test (Original Logic + Walkin UI)" subtitle="Direct Supabase & API Gateway integration with Walkin UI" />
       <div className="grid gap-4 px-4 py-4 lg:grid-cols-[1fr_400px]">
-        {/* MENU SIDE */}
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={effectiveOutletId} onValueChange={setOutletId} disabled={!!placed}>
+            <Select value={effectiveOutletId} onValueChange={setOutletId} disabled={paymentConfirmed || loading}>
               <SelectTrigger className="w-[240px]"><SelectValue placeholder="Select outlet" /></SelectTrigger>
               <SelectContent>
                 {(outletsData?.outlets ?? []).map((o: any) => (
-                  <SelectItem key={o.id} value={o.id}>
-                    {o.name}{o.city ? ` — ${o.city}` : ""}
-                  </SelectItem>
+                  <SelectItem key={o.id} value={o.id}>{o.name}{o.city ? ` — ${o.city}` : ''}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -328,17 +678,14 @@ function AdminPaymentTest() {
           </div>
 
           <div className="flex flex-wrap gap-1.5">
-            <button onClick={() => setCategory("")} className={`rounded-full border px-3 py-1 text-xs ${!category ? "border-saffron bg-saffron text-cream" : "border-gold/30 bg-card text-maroon"}`}>All</button>
+            <button onClick={() => setCategory('')} className={`rounded-full border px-3 py-1 text-xs ${!category ? 'border-saffron bg-saffron text-cream' : 'border-gold/30 bg-card text-maroon'}`}>All</button>
             {categories.map((c: string) => (
-              <button key={c} onClick={() => setCategory(c)} className={`rounded-full border px-3 py-1 text-xs ${category === c ? "border-saffron bg-saffron text-cream" : "border-gold/30 bg-card text-maroon"}`}>{c}</button>
+              <button key={c} onClick={() => setCategory(c)} className={`rounded-full border px-3 py-1 text-xs ${category === c ? 'border-saffron bg-saffron text-cream' : 'border-gold/30 bg-card text-maroon'}`}>{c}</button>
             ))}
           </div>
 
           {menuLoading && <p className="text-sm text-muted-foreground">Loading menu…</p>}
-          {!!menuError && <p className="text-sm text-destructive">Failed to load menu</p>}
-          {!menuLoading && filtered.length === 0 && (
-            <p className="text-sm text-muted-foreground">No items available for this outlet.</p>
-          )}
+          {!menuLoading && filtered.length === 0 && <p className="text-sm text-muted-foreground">No items available.</p>}
 
           <div className="grid gap-2 sm:grid-cols-2">
             {filtered.map((it: any) => (
@@ -349,13 +696,11 @@ function AdminPaymentTest() {
                   {it.variants.map((v: any) => (
                     <button
                       key={v.id}
-                      disabled={!!placed}
+                      disabled={paymentConfirmed || loading}
                       onClick={() => addLine(it, v)}
                       className="flex w-full items-center justify-between rounded-md border border-gold/15 bg-cream px-2 py-1.5 text-xs hover:bg-saffron/10 disabled:opacity-50"
                     >
-                      <span className="truncate text-left">
-                        {v.name}{v.label ? ` · ${v.label}` : ""}
-                      </span>
+                      <span className="truncate text-left">{v.name}{v.label ? ` · ${v.label}` : ''}</span>
                       <span className="ml-2 font-semibold text-maroon">₹{v.price.toFixed(2)}</span>
                     </button>
                   ))}
@@ -365,18 +710,15 @@ function AdminPaymentTest() {
           </div>
         </div>
 
-        {/* CART / BILLING SIDE */}
         <div className="space-y-3 rounded-2xl border border-gold/20 bg-card p-3 lg:sticky lg:top-20 lg:self-start">
           <div className="flex items-center justify-between">
             <h2 className="text-display text-lg text-maroon">
-              {placed ? `Order ${placed.orderNumber}` : `Cart (${cart.length})`}
+              {currentOrderId ? `Order Active` : `Cart (${cart.length})`}
             </h2>
-            {placed && (
-              <Button size="sm" variant="ghost" onClick={resetCart}>New order</Button>
-            )}
+            {currentOrderId && <Button size="sm" variant="ghost" onClick={resetCart}>New order</Button>}
           </div>
 
-          {!placed && (
+          {!paymentConfirmed && (
             <>
               <div className="max-h-[40vh] space-y-2 overflow-auto">
                 {cart.length === 0 && <p className="text-xs text-muted-foreground">No items added yet.</p>}
@@ -402,17 +744,8 @@ function AdminPaymentTest() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <Input 
-                  placeholder="Customer name (opt.)" 
-                  value={name} 
-                  onChange={(e) => setName(e.target.value)} 
-                />
-                <Input 
-                  placeholder="Phone (required for UPI)" 
-                  value={phone} 
-                  onChange={(e) => setPhone(e.target.value)} 
-                  className={paymentMode === "upi" && (!phone || phone.length !== 10) ? "border-red-500" : ""}
-                />
+                <Input placeholder="Customer name (opt.)" value={name} onChange={(e) => setName(e.target.value)} />
+                <Input placeholder="Phone (required for UPI)" value={phone} onChange={(e) => setPhone(e.target.value)} className={paymentMode === 'upi' && (!phone || phone.length !== 10) ? 'border-red-500' : ''} />
                 <Input placeholder="Table # (opt.)" value={table} onChange={(e) => setTable(e.target.value)} />
                 <Input type="number" min={0} placeholder="Discount ₹" value={discount} onChange={(e) => setDiscount(Number(e.target.value))} />
                 <Input type="number" min={0} step="0.01" placeholder="Tax %" value={taxPct} onChange={(e) => setTaxPct(Number(e.target.value))} />
@@ -422,46 +755,25 @@ function AdminPaymentTest() {
               <div>
                 <p className="mb-1 text-[11px] font-semibold uppercase text-muted-foreground">Payment method</p>
                 <div className="grid grid-cols-3 gap-1.5">
-                  {(["cash", "card_machine", "upi"] as const).map((m) => {
+                  {(['cash', 'card_machine', 'upi']).map((m) => {
                     const active = paymentMode === m;
-                    const Icon = m === "cash" ? Banknote : m === "card_machine" ? CreditCard : Smartphone;
+                    const Icon = m === 'cash' ? Banknote : m === 'card_machine' ? CreditCard : Smartphone;
                     return (
                       <button
                         key={m}
                         onClick={() => setPaymentMode(m)}
-                        className={`flex flex-col items-center gap-1 rounded-md border px-2 py-2 text-[11px] ${active ? "border-saffron bg-saffron text-cream" : "border-gold/30 bg-cream text-maroon"}`}
+                        className={`flex flex-col items-center gap-1 rounded-md border px-2 py-2 text-[11px] ${active ? 'border-saffron bg-saffron text-cream' : 'border-gold/30 bg-cream text-maroon'}`}
                       >
                         <Icon className="h-4 w-4" />
-                        {m === "cash" ? "Cash" : m === "card_machine" ? "Card Machine" : "UPI / PhonePe"}
+                        {m === 'cash' ? 'Cash' : m === 'card_machine' ? 'Card Machine' : 'UPI / PhonePe'}
                       </button>
                     );
                   })}
                 </div>
               </div>
-
-              {paymentMode === "upi" && (
-                <div className="space-y-2">
-                  <div className="rounded-md bg-blue-50 p-2 text-[11px] text-blue-700 border border-blue-200">
-                    <p className="font-semibold">📱 UPI Payment Flow:</p>
-                    <ol className="list-decimal list-inside mt-1 space-y-0.5">
-                      <li>Enter customer's 10-digit phone number</li>
-                      <li>Click "Pay with PhonePe"</li>
-                      <li>Order will be created and PhonePe checkout will open</li>
-                      <li>Status will automatically poll for completion</li>
-                    </ol>
-                  </div>
-                  
-                  {(!phone || phone.length !== 10) && (
-                    <p className="text-[10px] text-destructive text-center">
-                      ⚠️ Please enter a valid 10-digit phone number
-                    </p>
-                  )}
-                </div>
-              )}
             </>
           )}
 
-          {/* Totals */}
           <div className="space-y-1 border-t border-gold/20 pt-2 text-xs">
             <div className="flex justify-between"><span>Subtotal</span><span>₹{subtotal.toFixed(2)}</span></div>
             <div className="flex justify-between"><span>Discount</span><span>− ₹{(Number(discount) || 0).toFixed(2)}</span></div>
@@ -469,117 +781,62 @@ function AdminPaymentTest() {
             <div className="flex justify-between text-base font-bold text-maroon"><span>Total</span><span>₹{grand.toFixed(2)}</span></div>
           </div>
 
-          {/* STEP 1: Place Order (for Cash/Card/UPI) */}
-          {!placed && (
+          {!paymentConfirmed && !loading && !showPaymentChannel && (
             <Button
-              disabled={!cart.length || !effectiveOutletId || isPlacing || (paymentMode === "upi" && (!phone || phone.length !== 10))}
-              onClick={() => handlePlaceOrder()}
+              disabled={!cart.length || (paymentMode === 'upi' && (!phone || phone.length !== 10))}
+              onClick={processPayment}
               className="w-full bg-gradient-to-br from-maroon to-maroon/80 text-cream"
             >
-              {isPlacing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              {paymentMode === "upi" ? "Pay with PhonePe" : "Place Order"}
+              {paymentMode === 'upi' ? 'Pay with PhonePe' : 'Complete Order'}
             </Button>
           )}
 
-          {/* STEP 2: Cash / Card → confirm collected */}
-          {placed && placed.status === "awaiting_collection" && (
-            <Button
-              disabled={isCollecting}
-              onClick={() => handleCollect()}
-              className="w-full bg-gradient-to-br from-saffron to-saffron-deep text-cream"
-            >
-              {isCollecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-              {placed.paymentMode === "cash" ? "Confirm Cash Collected" : "Confirm Card Payment Collected"}
-            </Button>
+          {loading && (
+            <div className="flex items-center justify-center p-4">
+              <Loader2 className="animate-spin h-6 w-6 text-maroon mr-2" />
+              <span>Processing...</span>
+            </div>
           )}
 
-          {/* STEP 2: UPI → show PhonePe link + polling status */}
-          {placed && (placed.status === "awaiting_upi" || placed.status === "upi_pending") && (
+          {showPaymentChannel && (
             <div className="space-y-2">
               <div className="rounded-md bg-saffron/10 p-2 text-[11px] text-maroon">
                 <p className="font-semibold flex items-center gap-1">
                   <Loader2 className="h-3 w-3 animate-spin" /> 
                   📱 Polling for Payment Status... ({verificationAttempts}/30)
                 </p>
-                <p className="mt-0.5">Order #{placed.orderNumber} • Total: ₹{grand.toFixed(2)}</p>
               </div>
-              
-              {placed.redirectUrl && (
-                <a
-                  href={placed.redirectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block w-full rounded-md border border-saffron bg-cream px-3 py-2 text-center text-xs font-semibold text-maroon hover:bg-saffron/10"
-                >
+              {paymentChannelUrl && (
+                <a href={paymentChannelUrl} target="_blank" rel="noopener noreferrer" className="block w-full rounded-md border border-saffron bg-cream px-3 py-2 text-center text-xs font-semibold text-maroon hover:bg-saffron/10">
                   Open PhonePe Checkout ↗
                 </a>
               )}
-              
-              <div className="flex gap-2">
-                <Button
-                  disabled={isVerifying}
-                  onClick={() => handleVerify(true)}
-                  className="flex-1 bg-gradient-to-br from-saffron to-saffron-deep text-cream"
-                >
-                  {isVerifying ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                  Verify Manually
-                </Button>
-                
-                {/* Demo fallback for testing */}
-                <Button
-                  variant="outline"
-                  onClick={() => handleMockPaymentSuccess()}
-                  className="border-dashed border-green-500 text-green-600 hover:bg-green-50"
-                  title="Use this to complete payment in demo mode"
-                >
-                  Demo Complete
-                </Button>
-              </div>
-              
-              <p className="text-[10px] text-muted-foreground text-center">
-                System is automatically checking payment status.
-              </p>
             </div>
           )}
 
-          {/* UPI failed */}
-          {placed && placed.status === "upi_failed" && (
-            <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-              <div className="flex items-center gap-2 font-semibold">
-                <AlertTriangle className="h-4 w-4" /> Payment failed
-              </div>
-              <p>Please retry or choose another payment method.</p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => handleVerify(true)}>Retry Verify</Button>
-                <Button size="sm" variant="outline" onClick={resetCart}>New Order</Button>
-              </div>
+          {showRetryButton && (
+            <div className="space-y-2 mt-4">
+              <Button onClick={handleRetryVerification} variant="outline" className="w-full border-saffron text-maroon">
+                Retry Verification
+              </Button>
             </div>
           )}
 
-          {/* Paid → show Print Invoice */}
-          {placed && placed.status === "paid" && (
-            <div className="rounded-md border border-saffron/30 bg-saffron/10 p-2 text-[11px] text-maroon">
-              <div className="flex items-center gap-1 font-semibold">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Payment confirmed · Ready to print
+          {paymentConfirmed && invoiceData && (
+            <div className="space-y-4 mt-4">
+              <div className="rounded-md border border-green-500/30 bg-green-50 p-3 text-green-700 text-center">
+                <CheckCircle2 className="h-6 w-6 mx-auto mb-2" />
+                <p className="font-bold">Payment Confirmed!</p>
+                <p className="text-xs mt-1">Invoice #{invoiceData.invoiceNumber}</p>
               </div>
+              <Button onClick={() => window.open(invoiceData.invoiceUrl, '_blank')} className="w-full bg-green-600 hover:bg-green-700 text-white">
+                <FileText className="mr-2 h-4 w-4" /> Download PDF Invoice
+              </Button>
             </div>
           )}
 
-          <Button
-            disabled={printDisabled}
-            onClick={() =>
-              navigate(`/admin/invoice/${placed!.orderId}?format=thermal&print=1`)
-            }
-            variant={printDisabled ? "outline" : "default"}
-            className="w-full"
-          >
-            <Printer className="mr-2 h-4 w-4" />
-            Print Invoice
-          </Button>
         </div>
       </div>
     </AdminPage>
   );
 }
-
-export default AdminPaymentTest;
