@@ -22,7 +22,8 @@ const NAV_GROUPS = [
     items: [
       { title: "Dashboard", to: "/admin/dashboard", icon: LayoutDashboard },
       { title: "Orders", to: "/admin/orders", icon: ShoppingBag },
-      { title: "Walk-in Order", to: "/admin/walkin", icon: ConciergeBell },
+      // { title: "Walk-in Order", to: "/admin/walkin", icon: ConciergeBell },
+      { title: "Walk-in Order", to: "/admin/payment-test", icon: Smartphone },
       { title: "Customers", to: "/admin/customers", icon: Users },
       { title: "Outlets", to: "/admin/outlets", icon: Store },
     ],
@@ -49,7 +50,7 @@ const NAV_GROUPS = [
       { title: "Invoices", to: "/admin/invoices", icon: Receipt },
       { title: "Reports", to: "/admin/reports", icon: BarChart3 },
       { title: "Bulk Upload", to: "/admin/bulk-upload", icon: Upload },
-      { title: "Payment Test", to: "/admin/payment-test", icon: Smartphone },
+      
     ],
   },
 ] as const;
