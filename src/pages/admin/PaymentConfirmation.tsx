@@ -88,7 +88,7 @@ async function buildPdfBlob(args: any) {
     doc.text(v, 540, endY + i * 16, { align: 'right' });
   });
 
-  const paid = (payments || []).find((p: any) => p.payment_status === 'success');
+  const paid = (payments || []).find((p: any) => p.payment_status === 'success' || p.payment_status === 'paid');
   if (paid) {
     doc.setFontSize(10); 
     doc.setTextColor(0, 120, 0);
@@ -124,7 +124,8 @@ export default function PaymentConfirmation() {
     const orderIdParam = searchParams.get('orderId');
     if (orderIdParam) {
       setOrderId(orderIdParam);
-      verifyPayment(orderIdParam);
+      // First call PhonePe API to check status
+      checkPhonePeStatus(orderIdParam);
     } else {
       setLoading(false);
       setStatus('failed');
@@ -136,83 +137,30 @@ export default function PaymentConfirmation() {
     };
   }, [searchParams]);
 
-  const verifyPayment = async (orderId: string) => {
-    try {
-      // First check order in database
-      const { data: order, error } = await supabaseAdmin
-        .from('orders')
-        .select(`
-          *,
-          order_items (*),
-          payments (*),
-          invoices (*)
-        `)
-        .eq('id', orderId)
-        .single();
-
-      if (error) throw error;
-
-      setOrderDetails(order);
-
-      // Get merchant transaction ID from payments
-      if (order.payments && order.payments.length > 0) {
-        const payment = order.payments[0];
-        setMerchantTransactionId(payment.merchant_transaction_id);
-      }
-
-      // Check if already paid
-      const isPaid = order.payment_status === 'paid' || 
-                     order.payment_status === 'success' ||
-                     order.order_status === 'received' ||
-                     order.order_status === 'completed';
-
-      const isFailed = order.payment_status === 'failed' || 
-                       order.order_status === 'payment_failed';
-
-      if (isPaid) {
-        setStatus('success');
-        if (order.invoices && order.invoices.length > 0) {
-          setInvoiceData(order.invoices[0]);
-        } else {
-          // Generate invoice if not exists
-          await generateInvoice(orderId);
-        }
-        toast.success('Payment confirmed!');
-      } else if (isFailed) {
-        setStatus('failed');
-        toast.error('Payment failed');
-      } else {
-        // Call PhonePe Edge Function to check status
-        await checkPhonePeStatus(orderId);
-      }
-    } catch (error) {
-      console.error('Error verifying payment:', error);
-      setStatus('failed');
-      toast.error('Failed to verify payment');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const checkPhonePeStatus = async (orderId: string) => {
     try {
-      // Get merchant transaction ID from database
-      const { data: payment } = await supabaseAdmin
+      setLoading(true);
+      
+      // Step 1: Get merchant transaction ID from database
+      const { data: payment, error: paymentError } = await supabaseAdmin
         .from('payments')
         .select('merchant_transaction_id')
         .eq('order_id', orderId)
         .single();
 
-      if (!payment?.merchant_transaction_id) {
+      if (paymentError || !payment?.merchant_transaction_id) {
+        // If no payment record, fetch order details
+        await fetchOrderDetails(orderId);
         setStatus('pending');
         toast.warning('No transaction found. Please check manually.');
+        setLoading(false);
         return;
       }
 
       const merchantId = payment.merchant_transaction_id;
       setMerchantTransactionId(merchantId);
 
-      // Call Supabase Edge Function to check status
+      // Step 2: Call PhonePe Edge Function to check status
       const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
         action: 'status',
         merchantOrderId: merchantId
@@ -222,6 +170,7 @@ export default function PaymentConfirmation() {
         setPhonePeResponse(response.data);
         const result = response.data;
         
+        // Step 3: Check if payment is successful based on PhonePe response
         const isSuccess = 
           result.state === 'COMPLETED' || 
           result.status === 'SUCCESS' ||
@@ -235,18 +184,28 @@ export default function PaymentConfirmation() {
           result.success === false;
 
         if (isSuccess) {
-          // Update order status in database
-          await updateOrderStatus(orderId, 'success', merchantId);
-          setStatus('success');
+          // Step 4: Update database with success status
+          await updateOrderStatus(orderId, 'success', merchantId, result);
+          
+          // Step 5: Generate invoice
           await generateInvoice(orderId);
+          
+          setStatus('success');
           toast.success('Payment confirmed!');
+          
+          // Step 6: Fetch updated order details
+          await fetchOrderDetails(orderId);
+          
         } else if (isFailed) {
-          await updateOrderStatus(orderId, 'failed', merchantId);
+          // Update database with failed status
+          await updateOrderStatus(orderId, 'failed', merchantId, result);
           setStatus('failed');
           toast.error('Payment failed');
+          await fetchOrderDetails(orderId);
         } else {
           // Still pending - start polling
           setStatus('pending');
+          toast.info('Payment is still processing. Please wait...');
           startPolling(orderId, merchantId);
         }
       } else {
@@ -256,7 +215,7 @@ export default function PaymentConfirmation() {
     } catch (error: any) {
       console.error('Error checking PhonePe status:', error);
       
-      // If Edge Function fails, check database status
+      // If Edge Function fails, check database status as fallback
       const { data: order } = await supabaseAdmin
         .from('orders')
         .select('payment_status, order_status')
@@ -266,25 +225,32 @@ export default function PaymentConfirmation() {
       if (order?.payment_status === 'paid' || order?.order_status === 'received') {
         setStatus('success');
         await generateInvoice(orderId);
+        await fetchOrderDetails(orderId);
       } else if (order?.payment_status === 'failed' || order?.order_status === 'payment_failed') {
         setStatus('failed');
+        await fetchOrderDetails(orderId);
       } else {
         setStatus('pending');
         toast.warning('Unable to verify payment status. Please check manually.');
+        await fetchOrderDetails(orderId);
       }
+    } finally {
+      setLoading(false);
     }
   };
 
-  const updateOrderStatus = async (orderId: string, status: string, merchantId: string) => {
+  const updateOrderStatus = async (orderId: string, status: string, merchantId: string, phonePeResult: any) => {
     try {
       const isSuccess = status === 'success';
       
-      // Update payments table
+      // Update payments table with PhonePe response
       await supabaseAdmin
         .from('payments')
         .update({
           payment_status: isSuccess ? 'success' : 'failed',
           paid_at: isSuccess ? new Date().toISOString() : null,
+          gateway_response_snapshot: phonePeResult, // Store the full PhonePe response
+          transaction_id: phonePeResult?.paymentDetails?.[0]?.transactionId || merchantId,
         })
         .eq('merchant_transaction_id', merchantId);
 
@@ -294,6 +260,7 @@ export default function PaymentConfirmation() {
         .update({
           payment_status: isSuccess ? 'paid' : 'failed',
           order_status: isSuccess ? 'received' : 'payment_failed',
+          last_updated_by: 'system',
         })
         .eq('id', orderId);
 
@@ -309,23 +276,10 @@ export default function PaymentConfirmation() {
           changed_by_role: 'system',
         });
 
-      // Refresh order details
-      const { data: updatedOrder } = await supabaseAdmin
-        .from('orders')
-        .select(`
-          *,
-          order_items (*),
-          payments (*),
-          invoices (*)
-        `)
-        .eq('id', orderId)
-        .single();
-
-      if (updatedOrder) {
-        setOrderDetails(updatedOrder);
-      }
+      toast.success(isSuccess ? 'Payment status updated successfully!' : 'Payment status updated.');
     } catch (error) {
       console.error('Error updating order status:', error);
+      toast.error('Failed to update payment status');
     }
   };
 
@@ -348,7 +302,8 @@ export default function PaymentConfirmation() {
         .from('orders')
         .select(`
           id, order_number, created_at, subtotal, tax_amount, grand_total, 
-          walk_in_customer_name, walk_in_customer_phone, order_type, table_number, customer_notes
+          walk_in_customer_name, walk_in_customer_phone, order_type, table_number, 
+          customer_notes, outlet_id
         `)
         .eq('id', orderId)
         .single();
@@ -411,9 +366,15 @@ export default function PaymentConfirmation() {
 
       setInvoiceData(invoiceRecord);
       toast.success('Invoice generated successfully!');
+    } catch (error) {
+      console.error('Error generating invoice:', error);
+      toast.error('Failed to generate invoice');
+    }
+  };
 
-      // Refresh order details with invoice
-      const { data: updatedOrder } = await supabaseAdmin
+  const fetchOrderDetails = async (orderId: string) => {
+    try {
+      const { data: order, error } = await supabaseAdmin
         .from('orders')
         .select(`
           *,
@@ -424,12 +385,12 @@ export default function PaymentConfirmation() {
         .eq('id', orderId)
         .single();
 
-      if (updatedOrder) {
-        setOrderDetails(updatedOrder);
-      }
+      if (error) throw error;
+      setOrderDetails(order);
+      return order;
     } catch (error) {
-      console.error('Error generating invoice:', error);
-      toast.error('Failed to generate invoice');
+      console.error('Error fetching order details:', error);
+      return null;
     }
   };
 
@@ -443,31 +404,7 @@ export default function PaymentConfirmation() {
       setPollingAttempts(attempts);
 
       try {
-        // Check database first
-        const { data: order } = await supabaseAdmin
-          .from('orders')
-          .select('payment_status, order_status')
-          .eq('id', orderId)
-          .single();
-
-        if (order?.payment_status === 'paid' || order?.order_status === 'received') {
-          setStatus('success');
-          setIsPolling(false);
-          await generateInvoice(orderId);
-          toast.success('Payment confirmed!');
-          clearInterval(interval);
-          return;
-        }
-
-        if (order?.payment_status === 'failed' || order?.order_status === 'payment_failed') {
-          setStatus('failed');
-          setIsPolling(false);
-          toast.error('Payment failed');
-          clearInterval(interval);
-          return;
-        }
-
-        // Call Edge Function for status
+        // Call PhonePe Edge Function for status
         const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
           action: 'status',
           merchantOrderId: merchantId
@@ -490,16 +427,18 @@ export default function PaymentConfirmation() {
             result.success === false;
 
           if (isSuccess) {
-            await updateOrderStatus(orderId, 'success', merchantId);
+            await updateOrderStatus(orderId, 'success', merchantId, result);
             setStatus('success');
             setIsPolling(false);
             await generateInvoice(orderId);
+            await fetchOrderDetails(orderId);
             toast.success('Payment confirmed!');
             clearInterval(interval);
           } else if (isFailed) {
-            await updateOrderStatus(orderId, 'failed', merchantId);
+            await updateOrderStatus(orderId, 'failed', merchantId, result);
             setStatus('failed');
             setIsPolling(false);
+            await fetchOrderDetails(orderId);
             toast.error('Payment failed');
             clearInterval(interval);
           }
@@ -560,7 +499,7 @@ export default function PaymentConfirmation() {
           <div className="w-full max-w-md rounded-2xl border border-gold/20 bg-card p-8 text-center">
             <Loader2 className="mx-auto h-12 w-12 animate-spin text-maroon" />
             <h2 className="mt-4 text-xl font-semibold text-maroon">Verifying Payment...</h2>
-            <p className="mt-2 text-sm text-muted-foreground">Please wait while we confirm your payment</p>
+            <p className="mt-2 text-sm text-muted-foreground">Checking with PhonePe...</p>
             <div className="mt-4 h-1 w-full overflow-hidden rounded-full bg-gold/20">
               <div className="h-full w-1/2 animate-pulse rounded-full bg-maroon"></div>
             </div>
@@ -596,6 +535,14 @@ export default function PaymentConfirmation() {
                     <span className="font-semibold">{orderDetails.walk_in_customer_name}</span>
                   </div>
                 )}
+                {orderDetails.payments && orderDetails.payments[0]?.transaction_id && (
+                  <div className="mt-1 flex justify-between text-sm">
+                    <span className="text-muted-foreground">Transaction ID</span>
+                    <span className="font-mono text-xs font-semibold">
+                      {orderDetails.payments[0].transaction_id}
+                    </span>
+                  </div>
+                )}
                 {invoiceData && (
                   <div className="mt-2 border-t border-green-200 pt-2">
                     <div className="flex justify-between text-sm">
@@ -608,7 +555,7 @@ export default function PaymentConfirmation() {
                   <div className="mt-2 border-t border-green-200 pt-2">
                     <details className="text-xs">
                       <summary className="cursor-pointer text-muted-foreground">PhonePe Response Details</summary>
-                      <pre className="mt-1 overflow-auto rounded bg-gray-50 p-2 text-xs">
+                      <pre className="mt-1 max-h-40 overflow-auto rounded bg-gray-50 p-2 text-xs">
                         {JSON.stringify(phonePeResponse, null, 2)}
                       </pre>
                     </details>
@@ -669,7 +616,7 @@ export default function PaymentConfirmation() {
                   <div className="mt-2 border-t border-red-200 pt-2">
                     <details className="text-xs">
                       <summary className="cursor-pointer text-muted-foreground">PhonePe Response Details</summary>
-                      <pre className="mt-1 overflow-auto rounded bg-gray-50 p-2 text-xs">
+                      <pre className="mt-1 max-h-40 overflow-auto rounded bg-gray-50 p-2 text-xs">
                         {JSON.stringify(phonePeResponse, null, 2)}
                       </pre>
                     </details>
