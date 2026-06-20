@@ -863,15 +863,14 @@ export default function AdminPaymentTest() {
             </div>
           )}
 
-          {paymentConfirmed && invoiceData && (
+          {paymentConfirmed && currentOrderId && (
             <div className="space-y-4 mt-4">
               <div className="rounded-md border border-green-500/30 bg-green-50 p-3 text-green-700 text-center">
                 <CheckCircle2 className="h-6 w-6 mx-auto mb-2" />
                 <p className="font-bold">Payment Confirmed!</p>
-                <p className="text-xs mt-1">Invoice #{invoiceData.invoiceNumber}</p>
               </div>
-              <Button onClick={() => window.open(invoiceData.invoiceUrl, '_blank')} className="w-full bg-green-600 hover:bg-green-700 text-white">
-                <FileText className="mr-2 h-4 w-4" /> Download PDF Invoice
+              <Button onClick={() => navigate(`/admin/invoice/${currentOrderId}?format=thermal&print=1`)} className="w-full bg-green-600 hover:bg-green-700 text-white">
+                <Printer className="mr-2 h-4 w-4" /> Print Invoice
               </Button>
             </div>
           )}
