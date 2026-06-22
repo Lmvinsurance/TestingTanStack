@@ -12,10 +12,12 @@ import {
   updateOrderStatus,
 } from "@/lib/orders.functions";
 import { verifyPhonePePayment } from "@/lib/payments.functions";
-import { getMyInvoiceForOrder, generateMyInvoice } from "@/lib/invoices.functions";
+import { getMyInvoiceForOrder, generateMyInvoice, getMyInvoiceOrderDetails, updateMyInvoiceUrl } from "@/lib/invoices.functions";
 import { clearCart } from "@/lib/cart-store";
 import { clearCheckout } from "@/lib/checkout-store";
 import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { buildPdfBlob } from "@/components/invoice-pdf";
 
 type Search = { orderId?: string; method?: "phonepe" | "upi" | "cod" };
 
@@ -29,6 +31,8 @@ function PaymentStatusScreen() {
   const verifyPhonePe = useServerFn(verifyPhonePePayment);
   const fetchInvoice = useServerFn(getMyInvoiceForOrder);
   const regenInvoice = useServerFn(generateMyInvoice);
+  const fetchRawDetails = useServerFn(getMyInvoiceOrderDetails);
+  const updateInvoiceUrl = useServerFn(updateMyInvoiceUrl);
   const updatePayment = useServerFn(updateCustomerPaymentStatus);
   const updateOrder = useServerFn(updateOrderStatus);
 
@@ -196,9 +200,29 @@ function PaymentStatusScreen() {
     if (!orderId) return;
     setInvLoading(true);
     try {
-      await regenInvoice({ data: { orderId } });
-      const res = await fetchInvoice({ data: { orderId } });
-      setInvoice(res.invoice);
+      const res = await regenInvoice({ data: { orderId } });
+      const invoiceNumber = res.invoiceNumber;
+      
+      const details = await fetchRawDetails({ data: { orderId } });
+      const blob = await buildPdfBlob({
+        order: details.order,
+        items: details.items,
+        addons: details.addons,
+        payments: details.payments,
+        customer: details.customer,
+        outlet: details.outlet,
+        invoiceNumber,
+      });
+
+      const path = `invoices/${orderId}/${invoiceNumber}.pdf`;
+      const up = await supabase.storage.from("invoices").upload(path, blob, { contentType: "application/pdf", upsert: true });
+      if (up.error) throw up.error;
+      const { data: pub } = supabase.storage.from("invoices").getPublicUrl(path);
+
+      await updateInvoiceUrl({ data: { orderId, invoiceUrl: pub.publicUrl } });
+
+      const finalRes = await fetchInvoice({ data: { orderId } });
+      setInvoice(finalRes.invoice);
       toast.success("Invoice ready");
     } catch (e) {
       console.error("Error regenerating invoice:", e);
@@ -359,8 +383,12 @@ function PaymentStatusScreen() {
                       Download Invoice
                     </a>
                   ) : (
-                    <button disabled className="flex-1 rounded-xl bg-saffron/40 px-3 py-2 text-xs font-semibold text-cream/80">
-                      PDF coming soon
+                    <button 
+                      onClick={regenerate} 
+                      disabled={invLoading}
+                      className="flex-1 rounded-xl bg-saffron px-3 py-2 text-center text-xs font-semibold text-cream hover:bg-saffron-dark transition-colors"
+                    >
+                      {invLoading ? "Generating..." : "Generate PDF"}
                     </button>
                   )}
                   <button 

@@ -134,3 +134,57 @@ export const generateAndUploadMyInvoicePdf = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true, invoiceUrl: pubData.publicUrl };
   });
+
+export const getMyInvoiceOrderDetails = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { orderId: string }) => {
+    if (!data?.orderId) throw new Error("orderId required");
+    return data;
+  })
+  .handler(async ({ data, context }) => {
+    const ok = await customerOwnsOrder(data.orderId, context.userId);
+    if (!ok) throw new Error("Order not found");
+    
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const [{ data: order }, { data: items }, { data: payments }] = await Promise.all([
+      supabaseAdmin.from("orders").select("*").eq("id", data.orderId).maybeSingle(),
+      supabaseAdmin.from("order_items").select("*").eq("order_id", data.orderId),
+      supabaseAdmin.from("payments").select("*").eq("order_id", data.orderId),
+    ]);
+    
+    if (!order) throw new Error("Order not found");
+    const itemIds = (items ?? []).map((i) => i.id);
+    const { data: addons } = itemIds.length
+      ? await supabaseAdmin.from("order_item_addons").select("*").in("order_item_id", itemIds)
+      : { data: [] as any[] };
+      
+    const [{ data: customer }, { data: outlet }] = await Promise.all([
+      order.customer_id
+        ? supabaseAdmin.from("customers").select("*").eq("id", order.customer_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabaseAdmin.from("outlets").select("*").eq("id", order.outlet_id).maybeSingle(),
+    ]);
+    
+    return { order, items: items ?? [], addons: addons ?? [], payments: payments ?? [], customer, outlet };
+  });
+
+export const updateMyInvoiceUrl = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { orderId: string, invoiceUrl: string }) => {
+    if (!data?.orderId) throw new Error("orderId required");
+    if (!data?.invoiceUrl) throw new Error("invoiceUrl required");
+    return data;
+  })
+  .handler(async ({ data, context }) => {
+    const ok = await customerOwnsOrder(data.orderId, context.userId);
+    if (!ok) throw new Error("Order not found");
+    
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("invoices")
+      .update({ invoice_url: data.invoiceUrl })
+      .eq("order_id", data.orderId);
+      
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
