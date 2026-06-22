@@ -7,22 +7,7 @@ import type { Database } from './types';
 
 import { supabase } from './client';
 
-// In a standard React SPA,// We create a true admin client bypassing RLS using the service role key.
-// This allows server functions to perform sensitive updates (like payment status)
-// that users shouldn't be able to do directly.
-
-// Fallbacks for when this is mistakenly imported on the client side
-const fallbackUrl = "https://aynfbxixpviadworsbmk.supabase.co";
-const fallbackKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5bmZieGl4cHZpYWR3b3JzYm1rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5NjczMjYsImV4cCI6MjA5NjU0MzMyNn0.E9OwY2oMspfkQizA1Vheb4D0wa3tSAGWWMcBTPkD3bc";
-
-const getEnv = (key: string) => {
-  if (typeof process !== 'undefined' && process.env) {
-    return process.env[key];
-  }
-  return undefined;
-};
-
-const url = getEnv('VITE_SUPABASE_URL') || getEnv('SUPABASE_URL') || fallbackUrl;
-const key = getEnv('SUPABASE_SERVICE_ROLE_KEY') || getEnv('SERVICE_ROLE_KEY') || fallbackKey;
-
-export const supabaseAdmin = createClient<Database>(url, key);
+// In a standard React SPA, we don't have a secure backend to hold a service role key.
+// Instead, we alias the "admin" client to the standard authenticated client.
+// This ensures that all requests carry the user's JWT for RLS policies.
+export const supabaseAdmin = supabase;
