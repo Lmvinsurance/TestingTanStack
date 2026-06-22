@@ -109,10 +109,16 @@ export async function applyPhonePeStatus(
   }
 
   if (mapped.paymentStatus === "success") {
-    await supabaseAdmin
+    const { error: updateError } = await supabaseAdmin
       .from("orders")
       .update({ payment_status: "paid", order_status: "received" })
       .eq("id", orderId);
+    
+    if (updateError) {
+      console.error("FAILED TO UPDATE ORDER:", updateError);
+      throw new Error(`Order update failed: ${updateError.message}`);
+    }
+
     await supabaseAdmin.from("order_status_history").insert({
       order_id: orderId,
       old_status: order.order_status,
