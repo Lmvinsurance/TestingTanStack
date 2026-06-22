@@ -10,6 +10,8 @@ import { menuService, MenuItemWithDetails, ItemVariant } from "@/lib/supabase-me
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { UtensilsCrossed, AlertCircle, ShoppingBag } from "lucide-react";
+import { getPublicMenuItemWithDetailsById } from "@/lib/public-menu.functions";
+import { useServerFn } from "@/lib/react-start-mock";
 
 interface VariantSelectionModalProps {
   isOpen: boolean;
@@ -28,6 +30,7 @@ export function VariantSelectionModal({
 }: VariantSelectionModalProps) {
   const [loading, setLoading] = useState(false);
   const [itemDetails, setItemDetails] = useState<MenuItemWithDetails | null>(null);
+  const fetchItemDetails = useServerFn(getPublicMenuItemWithDetailsById);
 
   useEffect(() => {
     if (isOpen && itemId && outletId) {
@@ -38,9 +41,9 @@ export function VariantSelectionModal({
   const loadVariants = async () => {
     try {
       setLoading(true);
-      const data = await menuService.getMenuItemWithDetailsById(itemId!, outletId!);
+      const data = await fetchItemDetails({ data: { itemId: itemId!, outletId: outletId! } });
       if (data) {
-        setItemDetails(data);
+        setItemDetails(data as unknown as MenuItemWithDetails);
       } else {
         toast.error("Failed to load item details.");
         onClose();

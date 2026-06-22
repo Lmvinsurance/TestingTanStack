@@ -20,6 +20,8 @@ import { VariantSelectionModal } from "./customer/VariantSelectionModal";
 import { AuthModal } from "./customer/AuthModal";
 import { CartDrawer } from "./customer/CartDrawer";
 import { supabase } from "@/integrations/supabase/client";
+import { getPublicMenuByCategory } from "@/lib/public-menu.functions";
+import { useServerFn } from "@/lib/react-start-mock";
 
 /* ─────────────────────────  Menu Items List  ───────────────────────── */
 
@@ -257,6 +259,8 @@ export function CustomerMenuPage() {
     }
   }, [selectedCategory, outlet]);
 
+  const fetchItems = useServerFn(getPublicMenuByCategory);
+
   const loadCategories = async () => {
     try {
       setLoading(true);
@@ -274,10 +278,11 @@ export function CustomerMenuPage() {
   };
 
   const loadItems = async (categoryId: string, outletId?: string) => {
+    if (!outletId) return;
     try {
       setItemsLoading(true);
-      const data = await menuService.getMenuItemsByCategory(categoryId, outletId);
-      setMenuItems(data);
+      const data = await fetchItems({ data: { categoryId, outletId } });
+      setMenuItems(data as unknown as MenuItemWithImages[]);
     } catch (error) {
       console.error("Error loading menu items:", error);
       toast.error("Failed to load menu items");

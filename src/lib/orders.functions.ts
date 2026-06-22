@@ -341,59 +341,12 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
     const mTxnId = data.merchantTransactionId || pay?.merchant_transaction_id;
     if (!mTxnId) return { success: false, status: "pending" };
     
-    // Server-side verification
-    const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
-    const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
-      action: 'status',
-      merchantOrderId: mTxnId
-    });
+    // Server-side verification securely using edge function
+    const { phonepeOrderStatus, applyPhonePeStatus } = await import("./phonepe.server");
+    const status = await phonepeOrderStatus(mTxnId);
+    const applied = await applyPhonePeStatus(data.orderId, status);
     
-    if (!response.data) {
-      return { success: false, status: "pending" };
-    }
-    
-    const result = response.data;
-    const isSuccess = result.state === 'COMPLETED' || result.status === 'SUCCESS' || result.paymentState === 'COMPLETED' || result.success === true;
-    const isFailed = result.state === 'FAILED' || result.status === 'FAILED' || result.paymentState === 'FAILED';
-    
-    let dbStatus = "pending";
-    if (isSuccess) dbStatus = "success";
-    else if (isFailed) dbStatus = "failed";
-
-    if (dbStatus !== "pending") {
-      if (pay) {
-        await supabaseAdmin.from("payments").update({
-          payment_status: dbStatus,
-          paid_at: dbStatus === 'success' ? new Date().toISOString() : null,
-          transaction_id: mTxnId,
-        }).eq("id", pay.id);
-      }
-
-      const newOrderStatus = dbStatus === 'success' ? 'received' : 'payment_failed';
-      const newPaymentStatus = dbStatus === 'success' ? 'paid' : 'failed';
-
-      await supabaseAdmin.from("orders").update({
-        payment_status: newPaymentStatus,
-        order_status: newOrderStatus,
-        last_updated_by: context.userId,
-      }).eq("id", data.orderId);
-
-      await supabaseAdmin.from("order_status_history").insert({
-        order_id: data.orderId,
-        old_status: orderRow?.order_status || null,
-        new_status: newOrderStatus,
-        remarks: dbStatus === 'success' ? 'Payment successful' : 'Payment failed',
-        changed_by: context.userId,
-        changed_by_role: 'customer',
-      });
-
-      if (dbStatus === 'success') {
-        const { tryEnsureInvoice } = await import("./invoices.server");
-        await tryEnsureInvoice(data.orderId);
-      }
-    }
-
-    return { success: dbStatus !== "pending", status: dbStatus };
+    return { success: applied.paymentStatus === 'success', status: applied.paymentStatus };
   });
 
 
