@@ -234,12 +234,27 @@ export const createOrder = createServerFn({ method: "POST" })
     // get their invoice when cash is collected (separate step), not here.
 
 
+    let merchantTransactionId = undefined;
+    if (!isCod) {
+      merchantTransactionId = `ORDID${Date.now()}`;
+      await supabaseAdmin.from("payments").insert({
+        order_id: orderRow.id,
+        payment_gateway: "phonepe",
+        payment_mode: data.paymentMethod,
+        payment_status: "pending",
+        amount: data.totals.grandTotal,
+        transaction_id: merchantTransactionId,
+        merchant_transaction_id: merchantTransactionId,
+      });
+    }
+
     return {
       orderId: orderRow.id,
       orderNumber: orderRow.order_number,
       grandTotal: Number(orderRow.grand_total),
       orderStatus: orderRow.order_status,
       paymentStatus: orderRow.payment_status,
+      merchantTransactionId,
     };
   });
 
@@ -300,6 +315,73 @@ export const simulatePaymentSuccess = createServerFn({ method: "POST" })
     const { tryEnsureInvoice } = await import("./invoices.server");
     await tryEnsureInvoice(data.orderId);
     return { ok: true };
+  });
+
+export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { orderId: string, merchantTransactionId: string }) => data)
+  .handler(async ({ data, context }) => {
+    await assertOrderOwnership(data.orderId, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const axios = (await import("axios")).default;
+    
+    // Server-side verification
+    const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
+    const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
+      action: 'status',
+      merchantOrderId: data.merchantTransactionId
+    });
+    
+    if (!response.data) {
+      return { success: false, status: "pending" };
+    }
+    
+    const result = response.data;
+    const isSuccess = result.state === 'COMPLETED' || result.status === 'SUCCESS' || result.paymentState === 'COMPLETED' || result.success === true;
+    const isFailed = result.state === 'FAILED' || result.status === 'FAILED' || result.paymentState === 'FAILED';
+    
+    let dbStatus = "pending";
+    if (isSuccess) dbStatus = "success";
+    else if (isFailed) dbStatus = "failed";
+
+    if (dbStatus !== "pending") {
+      const { data: pay } = await supabaseAdmin
+        .from("payments")
+        .select("id")
+        .eq("order_id", data.orderId)
+        .eq("payment_status", "pending")
+        .maybeSingle();
+
+      if (pay) {
+        await supabaseAdmin.from("payments").update({
+          payment_status: dbStatus,
+          paid_at: dbStatus === 'success' ? new Date().toISOString() : null,
+          transaction_id: data.merchantTransactionId,
+        }).eq("id", pay.id);
+      }
+
+      await supabaseAdmin.from("orders").update({
+        payment_status: dbStatus === 'success' ? 'paid' : 'failed',
+        order_status: dbStatus === 'success' ? 'received' : 'payment_failed',
+        last_updated_by: context.userId,
+      }).eq("id", data.orderId);
+
+      await supabaseAdmin.from("order_status_history").insert({
+        order_id: data.orderId,
+        old_status: 'pending_payment',
+        new_status: dbStatus === 'success' ? 'received' : 'payment_failed',
+        remarks: dbStatus === 'success' ? 'Payment successful' : 'Payment failed',
+        changed_by: context.userId,
+        changed_by_role: 'customer',
+      });
+
+      if (dbStatus === 'success') {
+        const { tryEnsureInvoice } = await import("./invoices.server");
+        await tryEnsureInvoice(data.orderId);
+      }
+    }
+
+    return { success: dbStatus !== "pending", status: dbStatus };
   });
 
 

@@ -338,7 +338,7 @@ function CartScreen() {
             <p className="text-[10px] uppercase tracking-wider text-maroon-deep/50">Grand Total</p>
             <p className="text-display text-lg text-maroon">₹{grand}</p>
           </div>
-          <button onClick={() => navigate("/checkout")} disabled={!canCheckout}
+          <button onClick={() => navigate("/customer/checkout")} disabled={!canCheckout}
             className="flex-1 rounded-xl bg-gradient-to-r from-saffron to-saffron-deep px-5 py-3 text-sm font-semibold text-cream shadow disabled:opacity-50">
             Continue To Checkout
           </button>

@@ -208,14 +208,42 @@ function CheckoutScreen() {
           },
         },
       });
-      // For online methods, kick off PhonePe and redirect to their hosted checkout.
+      // For online methods, kick off PhonePe via Edge Function
       if (checkout.paymentMethod === "phonepe" || checkout.paymentMethod === "upi") {
-        const pp = await initPhonePe({ data: { orderId: result.orderId } });
-        if (!pp.alreadyPaid && pp.redirectUrl) {
-          window.location.href = pp.redirectUrl;
-          return;
+        const amountPaise = Math.round(grand * 100);
+        const redirectUrl = `${window.location.origin}/payment-status?orderId=${encodeURIComponent(result.orderId)}&method=${encodeURIComponent(checkout.paymentMethod)}&merchantTxnId=${encodeURIComponent(result.merchantTransactionId || '')}`;
+
+        try {
+          const axios = (await import("axios")).default;
+          const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
+          
+          const payload = {
+            action: 'create',
+            merchantOrderId: result.merchantTransactionId,
+            amountPaise: amountPaise,
+            redirectUrl: redirectUrl,
+            message: `Payment for Order #${result.orderNumber || result.orderId.slice(0, 8)}`,
+            metaInfo: {
+              orderId: result.orderId,
+              customerName: 'Customer',
+              customerPhone: '',
+              outletId: outlet.id
+            }
+          };
+
+          const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, payload);
+
+          if (response.status === 200 && response.data?.redirectUrl) {
+            window.location.href = response.data.redirectUrl;
+            return;
+          } else {
+            toast.error("PhonePe payment initiation failed.");
+          }
+        } catch (err: any) {
+          toast.error("Failed to initiate payment: " + err.message);
         }
       }
+      
       navigate(
         `/payment-status?orderId=${encodeURIComponent(result.orderId)}&method=${encodeURIComponent(checkout.paymentMethod)}`
       );

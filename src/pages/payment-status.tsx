@@ -14,6 +14,7 @@ import { getMyInvoiceForOrder, generateMyInvoice } from "@/lib/invoices.function
 import { clearCart } from "@/lib/cart-store";
 import { clearCheckout } from "@/lib/checkout-store";
 import { toast } from "sonner";
+import { updateCustomerPaymentStatus } from "@/lib/orders.functions";
 
 type Search = { orderId?: string; method?: "phonepe" | "upi" | "cod" };
 
@@ -55,15 +56,27 @@ function PaymentStatusScreen() {
     }
   };
 
+  const updatePayment = useServerFn(updateCustomerPaymentStatus);
+
   const runVerify = async (silent = false) => {
     if (!orderId || !isOnline) return;
     setVerifying(true);
     try {
-      const res = await verifyPhonePe({ data: { orderId } });
+      let statusResult = "pending";
+      const mTxnId = sp.get("merchantTxnId") || order?.payments?.[0]?.merchant_transaction_id;
+      
+      if (mTxnId) {
+        const result = await updatePayment({ data: { orderId, merchantTransactionId: mTxnId } });
+        statusResult = result.status;
+      } else {
+        const res = await verifyPhonePe({ data: { orderId } });
+        statusResult = res.paymentStatus;
+      }
+      
       const d = await refresh();
       if (!silent) {
-        if (res.paymentStatus === "success") toast.success("Payment confirmed");
-        else if (res.paymentStatus === "failed") toast.error("Payment failed");
+        if (statusResult === "success") toast.success("Payment confirmed");
+        else if (statusResult === "failed") toast.error("Payment failed");
         else toast.message("Payment still pending");
       }
       return d;
