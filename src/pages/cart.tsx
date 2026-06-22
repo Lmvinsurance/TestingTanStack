@@ -49,7 +49,7 @@ function CartScreen() {
   const coupon = checkout.coupon ? COUPONS.find((c) => c.code === checkout.coupon) ?? null : null;
   const discount = coupon ? (coupon.flat ? Math.min(coupon.value, itemsTotal) : Math.round(itemsTotal * coupon.value)) : 0;
   const taxes = Math.round((itemsTotal - discount) * 0.05);
-  const packing = cart.length ? 20 : 0;
+  const packing = cart.length ? 1 : 0;
   const delivery = checkout.orderType === "delivery" && cart.length ? 40 : 0;
   const grand = Math.max(0, itemsTotal - discount + taxes + packing + delivery);
 

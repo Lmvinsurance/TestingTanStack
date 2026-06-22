@@ -110,7 +110,7 @@ function CheckoutScreen() {
   const coupon = checkout.coupon && checkout.coupon in COUPONS ? COUPONS[checkout.coupon as keyof typeof COUPONS] : null;
   const discount = coupon ? (coupon.flat ? Math.min(coupon.value, itemsTotal) : Math.round(itemsTotal * coupon.value)) : 0;
   const taxes = Math.round((itemsTotal - discount) * 0.05);
-  const packing = 20;
+  const packing = 1;
   const delivery = checkout.orderType === "delivery" ? 40 : 0;
   const grand = Math.max(0, itemsTotal - discount + taxes + packing + delivery);
 
