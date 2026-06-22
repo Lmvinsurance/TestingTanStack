@@ -309,7 +309,7 @@ export const simulatePaymentSuccess = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-// FIXED: Updated updateCustomerPaymentStatus function
+// FIXED: Complete updateCustomerPaymentStatus function
 export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { orderId: string, merchantTransactionId?: string }) => {
@@ -320,30 +320,29 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
     await assertOrderOwnership(data.orderId, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    // Get the order and payment records
-    const { data: order } = await supabaseAdmin
+    // Get the order
+    const { data: order, error: orderError } = await supabaseAdmin
       .from("orders")
       .select("id, payment_status, order_status")
       .eq("id", data.orderId)
       .single();
 
-    if (!order) throw new Error("Order not found");
+    if (orderError || !order) {
+      console.error("Order fetch error:", orderError);
+      throw new Error("Order not found");
+    }
+
+    console.log("Current order status:", order);
 
     // If already paid, return success
     if (order.payment_status === "paid") {
       return { success: true, status: "paid" };
     }
 
-    // Get the pending payment record
-    const { data: pay } = await supabaseAdmin
-      .from("payments")
-      .select("id, merchant_transaction_id")
-      .eq("order_id", data.orderId)
-      .eq("payment_status", "pending")
-      .maybeSingle();
-
-    const mTxnId = data.merchantTransactionId || pay?.merchant_transaction_id;
+    // Get merchant transaction ID
+    const mTxnId = data.merchantTransactionId;
     if (!mTxnId) {
+      console.error("No merchant transaction ID provided");
       return { success: false, status: "pending", message: "No transaction ID found" };
     }
 
@@ -356,13 +355,13 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
       
       console.log("PhonePe status response:", status);
 
-      // Update order based on payment status
+      // Check if payment is completed
       if (status.state === "COMPLETED") {
         // Extract transaction ID from payment details
         const transactionId = status.paymentDetails?.[0]?.transactionId;
         
-        // Update payment record
-        await supabaseAdmin
+        // 1. Update the payment record
+        const { error: updatePaymentError } = await supabaseAdmin
           .from("payments")
           .update({
             payment_status: "success",
@@ -373,28 +372,45 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
           .eq("order_id", data.orderId)
           .eq("payment_status", "pending");
 
-        // Update order - BOTH payment_status AND order_status
-        await supabaseAdmin
+        if (updatePaymentError) {
+          console.error("Error updating payment:", updatePaymentError);
+        }
+
+        // 2. Update the order - CRITICAL: Update BOTH statuses
+        const { error: updateOrderError } = await supabaseAdmin
           .from("orders")
           .update({
             payment_status: "paid",
-            order_status: "received", // This is the critical fix!
+            order_status: "received", // Change from pending_payment to received
             updated_at: new Date().toISOString(),
             last_updated_by: context.userId,
           })
           .eq("id", data.orderId);
 
-        // Add to status history
-        await supabaseAdmin.from("order_status_history").insert({
-          order_id: data.orderId,
-          old_status: order.order_status,
-          new_status: "received",
-          remarks: "Payment confirmed via PhonePe. Order received.",
-          changed_by: context.userId,
-          changed_by_role: "customer",
-        });
+        if (updateOrderError) {
+          console.error("Error updating order:", updateOrderError);
+          throw new Error("Failed to update order status");
+        }
 
-        // Generate invoice
+        console.log("Order updated successfully to status: received");
+
+        // 3. Add to status history
+        const { error: historyError } = await supabaseAdmin
+          .from("order_status_history")
+          .insert({
+            order_id: data.orderId,
+            old_status: order.order_status,
+            new_status: "received",
+            remarks: "Payment confirmed via PhonePe. Order received.",
+            changed_by: context.userId,
+            changed_by_role: "customer",
+          });
+
+        if (historyError) {
+          console.error("Error adding status history:", historyError);
+        }
+
+        // 4. Generate invoice
         try {
           const { tryEnsureInvoice } = await import("./invoices.server");
           await tryEnsureInvoice(data.orderId);
@@ -402,7 +418,22 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
           console.error("Error generating invoice:", invoiceError);
         }
 
-        return { success: true, status: "success", transactionId };
+        // 5. Verify the update was successful
+        const { data: verifyOrder } = await supabaseAdmin
+          .from("orders")
+          .select("payment_status, order_status")
+          .eq("id", data.orderId)
+          .single();
+
+        console.log("Verified order status after update:", verifyOrder);
+
+        return { 
+          success: true, 
+          status: "success", 
+          transactionId,
+          orderStatus: verifyOrder?.order_status,
+          paymentStatus: verifyOrder?.payment_status
+        };
       } else if (status.state === "FAILED") {
         // Update payment record
         await supabaseAdmin
@@ -439,7 +470,8 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
     }
   });
 
-export const simulatePaymentFailed = createServerFn({ method: "POST" })
+// New: Manual fix for orders with successful payments but wrong status
+export const fixOrderStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { orderId: string }) => {
     if (!data?.orderId) throw new Error("orderId required");
@@ -448,30 +480,36 @@ export const simulatePaymentFailed = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     await assertOrderOwnership(data.orderId, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: order } = await supabaseAdmin
-      .from("orders")
-      .select("id, grand_total")
-      .eq("id", data.orderId)
-      .single();
-    if (!order) throw new Error("Order not found");
-    const txnId = `TXN-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-    const merchantTxnId = `MTX-${Date.now()}`;
-    await supabaseAdmin.from("payments").insert({
-      order_id: data.orderId,
-      payment_gateway: "PhonePe",
-      transaction_id: txnId,
-      merchant_transaction_id: merchantTxnId,
-      amount: order.grand_total,
-      payment_status: "failed",
-      payment_mode: "UPI",
-      gateway_response_snapshot: { simulated: true, code: "PAYMENT_FAILED", reason: "user_cancelled" },
-    });
-    await supabaseAdmin
-      .from("orders")
-      .update({ payment_status: "failed", order_status: "payment_failed", last_updated_by: context.userId })
-      .eq("id", data.orderId);
 
-    return { ok: true };
+    // Check if there's a successful payment
+    const { data: payment } = await supabaseAdmin
+      .from("payments")
+      .select("payment_status")
+      .eq("order_id", data.orderId)
+      .eq("payment_status", "success")
+      .maybeSingle();
+
+    if (payment) {
+      // Update order status to received
+      const { error } = await supabaseAdmin
+        .from("orders")
+        .update({
+          payment_status: "paid",
+          order_status: "received",
+          updated_at: new Date().toISOString(),
+          last_updated_by: context.userId,
+        })
+        .eq("id", data.orderId);
+
+      if (error) {
+        console.error("Error fixing order status:", error);
+        throw new Error("Failed to fix order status");
+      }
+
+      return { success: true, message: "Order status fixed" };
+    }
+
+    return { success: false, message: "No successful payment found" };
   });
 
 export const updateOrderStatus = createServerFn({ method: "POST" })
@@ -516,6 +554,41 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
     });
 
     return { success: true };
+  });
+
+export const simulatePaymentFailed = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { orderId: string }) => {
+    if (!data?.orderId) throw new Error("orderId required");
+    return data;
+  })
+  .handler(async ({ data, context }) => {
+    await assertOrderOwnership(data.orderId, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: order } = await supabaseAdmin
+      .from("orders")
+      .select("id, grand_total")
+      .eq("id", data.orderId)
+      .single();
+    if (!order) throw new Error("Order not found");
+    const txnId = `TXN-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    const merchantTxnId = `MTX-${Date.now()}`;
+    await supabaseAdmin.from("payments").insert({
+      order_id: data.orderId,
+      payment_gateway: "PhonePe",
+      transaction_id: txnId,
+      merchant_transaction_id: merchantTxnId,
+      amount: order.grand_total,
+      payment_status: "failed",
+      payment_mode: "UPI",
+      gateway_response_snapshot: { simulated: true, code: "PAYMENT_FAILED", reason: "user_cancelled" },
+    });
+    await supabaseAdmin
+      .from("orders")
+      .update({ payment_status: "failed", order_status: "payment_failed", last_updated_by: context.userId })
+      .eq("id", data.orderId);
+
+    return { ok: true };
   });
 
 export const getMyOrders = createServerFn({ method: "GET" })

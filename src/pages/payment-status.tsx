@@ -90,36 +90,14 @@ function PaymentStatusScreen() {
       console.log("Payment update result:", result);
       statusResult = result.status;
       
-      // If payment is successful, update order status
+      // If payment is successful, refresh order data
       if (statusResult === "success" || statusResult === "paid") {
-        console.log("Payment successful, updating order status to received");
-        
-        // Update order status to "received"
-        await updateOrder({ 
-          data: { 
-            orderId, 
-            orderStatus: "received",
-            paymentStatus: "paid"
-          } 
-        });
-        
-        // Refresh to get updated order
+        console.log("Payment successful, refreshing order...");
         await refresh();
-        console.log("Order status updated successfully");
-        
-        // Clear cart for successful payment
         clearCart();
         clearCheckout();
       } else if (statusResult === "failed") {
         console.log("Payment failed");
-        // Update order status to payment_failed
-        await updateOrder({ 
-          data: { 
-            orderId, 
-            orderStatus: "payment_failed",
-            paymentStatus: "failed"
-          } 
-        });
         await refresh();
       }
       
