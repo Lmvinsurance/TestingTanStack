@@ -355,8 +355,24 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
       
       console.log("PhonePe status response:", status);
 
-      // Check if payment is completed
-      if (status.state === "COMPLETED") {
+      // Update order based on payment status
+      const isSuccess = 
+        status.state === 'COMPLETED' || 
+        status.status === 'SUCCESS' ||
+        status.paymentState === 'COMPLETED' ||
+        status.success === true ||
+        (status.paymentDetails && status.paymentDetails.length > 0 && 
+         status.paymentDetails[0].state === 'COMPLETED');
+
+      const isFailed = 
+        status.state === 'FAILED' || 
+        status.status === 'FAILED' ||
+        status.paymentState === 'FAILED' ||
+        status.success === false ||
+        (status.paymentDetails && status.paymentDetails.length > 0 && 
+         status.paymentDetails[0].state === 'FAILED');
+
+      if (isSuccess) {
         // Extract transaction ID from payment details
         const transactionId = status.paymentDetails?.[0]?.transactionId;
         
@@ -434,7 +450,7 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
           orderStatus: verifyOrder?.order_status,
           paymentStatus: verifyOrder?.payment_status
         };
-      } else if (status.state === "FAILED") {
+      } else if (isFailed) {
         // Update payment record
         await supabaseAdmin
           .from("payments")
