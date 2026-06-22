@@ -64,8 +64,8 @@ function OrderDetailScreen() {
       <main className="grid min-h-screen place-items-center bg-cream p-6">
         <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-center">
           <p className="text-sm font-semibold text-red-700">{error ?? "Order not found or access denied."}</p>
-          <Link to="/customer/my-orders" className="mt-4 inline-block rounded-xl bg-saffron px-4 py-2 text-xs font-semibold text-cream">
-            Back to My Orders
+          <Link to="/customer/orders" className="mt-4 inline-block rounded-xl bg-saffron px-4 py-2 text-xs font-semibold text-cream">
+            View My Orders
           </Link>
         </div>
       </main>

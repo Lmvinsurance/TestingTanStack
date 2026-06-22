@@ -328,7 +328,7 @@ function PaymentStatusScreen() {
             className="flex items-center justify-center gap-2 rounded-xl bg-maroon px-3 py-2 text-xs font-semibold text-cream">
             <ReceiptText className="h-3.5 w-3.5" /> Track Order
           </button>
-          <Link to="/customer/my-orders"
+          <Link to="/customer/orders"
             className="flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
             My Orders
           </Link>
