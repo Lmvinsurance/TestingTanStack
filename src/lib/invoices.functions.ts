@@ -78,23 +78,59 @@ export const listMyInvoices = createServerFn({ method: "GET" })
     return { invoices: invs ?? [] };
   });
 
-/** Save the generated PDF URL for a customer's invoice */
-export const saveMyInvoiceUrl = createServerFn({ method: "POST" })
+/** Generate and upload PDF for a customer's invoice */
+export const generateAndUploadMyInvoicePdf = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { orderId: string, invoiceUrl: string }) => {
+  .inputValidator((data: { orderId: string, invoiceNumber: string }) => {
     if (!data?.orderId) throw new Error("orderId required");
-    if (!data?.invoiceUrl) throw new Error("invoiceUrl required");
+    if (!data?.invoiceNumber) throw new Error("invoiceNumber required");
     return data;
   })
   .handler(async ({ data, context }) => {
     const ok = await customerOwnsOrder(data.orderId, context.userId);
     if (!ok) throw new Error("Order not found");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    
+    // Fetch full order data for PDF
+    const { data: order } = await supabaseAdmin.from("orders").select("*").eq("id", data.orderId).single();
+    const { data: items } = await supabaseAdmin.from("order_items").select("*").eq("order_id", data.orderId);
+    const { data: payments } = await supabaseAdmin.from("payments").select("*").eq("order_id", data.orderId);
+    const { data: outlet } = await supabaseAdmin.from("outlets").select("*").eq("id", order?.outlet_id).single();
+    const { data: customer } = await supabaseAdmin.from("customers").select("*").eq("supabase_user_id", context.userId).single();
+    const itemIds = (items || []).map((i: any) => i.id);
+    const { data: addons } = itemIds.length ? await supabaseAdmin.from("order_item_addons").select("*").in("order_item_id", itemIds) : { data: [] };
+
+    // Build PDF
+    const { buildPdfBlob } = await import("@/components/invoice-pdf");
+    const blob = await buildPdfBlob({
+      order,
+      items: items || [],
+      addons: addons || [],
+      payments: payments || [],
+      customer: { full_name: `${customer?.first_name || ''} ${customer?.last_name || ''}`.trim() || 'Guest', phone: customer?.phone || '', email: customer?.email || '' },
+      outlet,
+      invoiceNumber: data.invoiceNumber
+    });
+
+    const path = `${data.orderId}/${data.invoiceNumber}.pdf`;
+    
+    // Convert Blob to ArrayBuffer for Node.js Supabase Storage upload
+    const arrayBuffer = await blob.arrayBuffer();
+
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from("invoices")
+      .upload(path, arrayBuffer, { contentType: "application/pdf", upsert: true });
+
+    if (uploadError) throw new Error(uploadError.message);
+
+    const { data: pubData } = supabaseAdmin.storage.from("invoices").getPublicUrl(path);
+
     const { error } = await supabaseAdmin
       .from("invoices")
-      .update({ invoice_url: data.invoiceUrl })
+      .update({ invoice_url: pubData.publicUrl })
       .eq("order_id", data.orderId)
       .is("invoice_url", null);
+
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, invoiceUrl: pubData.publicUrl };
   });

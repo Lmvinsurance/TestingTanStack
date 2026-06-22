@@ -19,7 +19,7 @@ const TABS: Tab[] = [
   { to: "/customer/menu", label: "Menu", icon: Utensils },
   { to: "/customer/outlets", label: "Outlets", icon: Store },
   { to: "/cart", label: "Cart", icon: ShoppingCart, badge: true },
-  { to: "/customer/orders", label: "Orders", icon: ClipboardList },
+  { to: "/customer/my-orders", label: "Orders", icon: ClipboardList },
 ];
 
 export function CustomerLayout({ children }: { children: ReactNode }) {

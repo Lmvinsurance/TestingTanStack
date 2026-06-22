@@ -130,8 +130,6 @@ function PaymentStatusScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eligible, orderId]);
 
-  const saveInvoiceUrl = useServerFn(saveMyInvoiceUrl);
-
   const refreshInvoice = async () => {
     if (!orderId) return;
     setInvLoading(true);
@@ -148,34 +146,9 @@ function PaymentStatusScreen() {
     (async () => {
       try {
         setInvLoading(true);
-        const customerInfo = {
-          full_name: `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'Guest',
-          phone: order.customer?.phone || '',
-          email: order.customer?.email || ''
-        };
-        const blob = await buildPdfBlob({
-          order: order.order,
-          items: order.items || [],
-          addons: [],
-          payments: order.payments || [],
-          customer: customerInfo,
-          outlet: order.outlet,
-          invoiceNumber: invoice.invoice_number
-        });
-
-        const path = `${orderId}/${invoice.invoice_number}.pdf`;
-        const { error: uploadError } = await supabase.storage
-          .from("invoices")
-          .upload(path, blob, { contentType: "application/pdf", upsert: true });
-
-        if (uploadError) throw new Error(uploadError.message);
-
-        const { data: pubData } = supabase.storage.from("invoices").getPublicUrl(path);
-
-        await saveInvoiceUrl({ data: { orderId: orderId!, invoiceUrl: pubData.publicUrl } });
-        
-        if (!cancelled) {
-          setInvoice({ ...invoice, invoice_url: pubData.publicUrl });
+        const res = await generateAndUploadPdf({ data: { orderId: orderId!, invoiceNumber: invoice.invoice_number } });
+        if (!cancelled && res.ok) {
+          setInvoice({ ...invoice, invoice_url: res.invoiceUrl });
         }
       } catch (err) {
         console.error("PDF gen error:", err);
@@ -355,7 +328,7 @@ function PaymentStatusScreen() {
             className="flex items-center justify-center gap-2 rounded-xl bg-maroon px-3 py-2 text-xs font-semibold text-cream">
             <ReceiptText className="h-3.5 w-3.5" /> Track Order
           </button>
-          <Link to="/customer/orders"
+          <Link to="/customer/my-orders"
             className="flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
             My Orders
           </Link>
