@@ -10,17 +10,13 @@ import {
   getMyOrderDetail,
 } from "@/lib/orders.functions";
 import { verifyPhonePePayment } from "@/lib/payments.functions";
-import { getMyInvoiceForOrder, generateMyInvoice, saveMyInvoiceUrl } from "@/lib/invoices.functions";
+import { getMyInvoiceForOrder, generateMyInvoice } from "@/lib/invoices.functions";
 import { clearCart } from "@/lib/cart-store";
 import { clearCheckout } from "@/lib/checkout-store";
 import { toast } from "sonner";
 import { updateCustomerPaymentStatus } from "@/lib/orders.functions";
-import { buildPdfBlob } from "@/components/invoice-pdf";
-import { supabase } from "@/integrations/supabase/client";
 
 type Search = { orderId?: string; method?: "phonepe" | "upi" | "cod" };
-
-
 
 function PaymentStatusScreen() {
   const ready = useRequireCustomer();
@@ -61,30 +57,97 @@ function PaymentStatusScreen() {
   const updatePayment = useServerFn(updateCustomerPaymentStatus);
 
   const runVerify = async (silent = false) => {
-    if (!orderId || !isOnline) return;
+    if (!orderId || !isOnline) {
+      console.log("Cannot verify: missing orderId or not online payment");
+      return;
+    }
+    
     setVerifying(true);
+    console.log("Starting payment verification for order:", orderId);
+    
     try {
       let statusResult = "pending";
-      const mTxnId = sp.get("merchantTxnId") || order?.payments?.[0]?.merchant_transaction_id;
+      
+      // Get merchant transaction ID from URL or order
+      let mTxnId = sp.get("merchantTxnId");
+      
+      // If not in URL, try to get from order's payment record
+      if (!mTxnId && order?.payments?.[0]?.merchant_transaction_id) {
+        mTxnId = order.payments[0].merchant_transaction_id;
+      }
+      
+      console.log("Merchant Transaction ID:", mTxnId);
       
       if (isOnline) {
-        // We let the backend fetch the merchantTxnId from the database directly
-        const result = await updatePayment({ data: { orderId, merchantTransactionId: mTxnId } });
+        // Call the verification function with the transaction ID
+        const result = await updatePayment({ 
+          data: { 
+            orderId, 
+            merchantTransactionId: mTxnId 
+          } 
+        });
+        
+        console.log("Payment update result:", result);
         statusResult = result.status;
+        
+        // If payment is successful, refresh order data
+        if (statusResult === "success" || statusResult === "paid") {
+          // Refresh order data to get updated status
+          const updatedOrder = await refresh();
+          console.log("Updated order after payment:", updatedOrder);
+          
+          // If order status is still pending, we need to update it
+          if (updatedOrder && updatedOrder.order.order_status === "pending_payment") {
+            console.log("Order status is still pending_payment, updating to received");
+            
+            // Call a function to update order status to "received"
+            // You'll need to implement this server function
+            try {
+              await updateOrderStatus({ 
+                data: { 
+                  orderId, 
+                  orderStatus: "received",
+                  paymentStatus: "paid"
+                } 
+              });
+              
+              // Refresh again to get the updated order
+              await refresh();
+              console.log("Order status updated successfully");
+            } catch (statusError) {
+              console.error("Failed to update order status:", statusError);
+            }
+          }
+        }
       } else {
         const res = await verifyPhonePe({ data: { orderId } });
+        console.log("PhonePe verification result:", res);
         statusResult = res.paymentStatus;
       }
       
-      const d = await refresh();
+      // Refresh one more time to ensure we have the latest data
+      const finalOrder = await refresh();
+      
+      // Show appropriate toast message
       if (!silent) {
-        if (statusResult === "success") toast.success("Payment confirmed");
-        else if (statusResult === "failed") toast.error("Payment failed");
-        else toast.message("Payment still pending");
+        if (statusResult === "success" || statusResult === "paid") {
+          toast.success("Payment confirmed! Your order is being prepared.");
+          // Clear cart for successful payment
+          clearCart();
+          clearCheckout();
+        } else if (statusResult === "failed") {
+          toast.error("Payment failed. Please try again.");
+        } else {
+          toast.message("Payment is still being processed. Please wait.");
+        }
       }
-      return d;
+      
+      return finalOrder;
     } catch (e) {
-      if (!silent) toast.error(e instanceof Error ? e.message : "Verification failed");
+      console.error("Verification error:", e);
+      if (!silent) {
+        toast.error(e instanceof Error ? e.message : "Verification failed");
+      }
     } finally {
       setVerifying(false);
     }
@@ -92,11 +155,18 @@ function PaymentStatusScreen() {
 
   useEffect(() => {
     if (!ready) return;
-    if (!orderId) { navigate("/cart", { replace: true }); return; }
+    if (!orderId) { 
+      navigate("/cart", { replace: true }); 
+      return; 
+    }
+    
     (async () => {
       const d = await refresh();
+      console.log("Initial order data:", d);
+      
       // If we just returned from PhonePe and still pending, hit verify.
       if (d && isOnline && d.order.paymentStatus === "pending") {
+        console.log("Payment still pending, starting verification...");
         await runVerify(true);
       }
     })();
@@ -115,6 +185,7 @@ function PaymentStatusScreen() {
   const eligible =
     order &&
     (order.order.paymentStatus === "paid" || order.order.paymentStatus === "cash_on_delivery");
+  
   useEffect(() => {
     if (!eligible || !orderId) return;
     let cancelled = false;
@@ -123,8 +194,11 @@ function PaymentStatusScreen() {
         setInvLoading(true);
         const res = await fetchInvoice({ data: { orderId } });
         if (!cancelled) setInvoice(res.invoice);
-      } catch { /* ignore */ }
-      finally { if (!cancelled) setInvLoading(false); }
+      } catch (error) {
+        console.error("Error fetching invoice:", error);
+      } finally { 
+        if (!cancelled) setInvLoading(false); 
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -137,27 +211,13 @@ function PaymentStatusScreen() {
       const res = await fetchInvoice({ data: { orderId } });
       setInvoice(res.invoice);
       if (!res.invoice) toast.message("Invoice is still being generated.");
-    } finally { setInvLoading(false); }
+    } catch (error) {
+      console.error("Error refreshing invoice:", error);
+      toast.error("Could not fetch invoice");
+    } finally { 
+      setInvLoading(false); 
+    }
   };
-
-  useEffect(() => {
-    if (!invoice || invoice.invoice_url || !order) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        setInvLoading(true);
-        const res = await generateAndUploadPdf({ data: { orderId: orderId!, invoiceNumber: invoice.invoice_number } });
-        if (!cancelled && res.ok) {
-          setInvoice({ ...invoice, invoice_url: res.invoiceUrl });
-        }
-      } catch (err) {
-        console.error("PDF gen error:", err);
-      } finally {
-        if (!cancelled) setInvLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [invoice?.invoice_url, order]);
 
   const regenerate = async () => {
     if (!orderId) return;
@@ -168,8 +228,11 @@ function PaymentStatusScreen() {
       setInvoice(res.invoice);
       toast.success("Invoice ready");
     } catch (e) {
+      console.error("Error regenerating invoice:", e);
       toast.error(e instanceof Error ? e.message : "Could not generate invoice");
-    } finally { setInvLoading(false); }
+    } finally { 
+      setInvLoading(false); 
+    }
   };
 
   if (!ready) return null;
@@ -209,13 +272,17 @@ function PaymentStatusScreen() {
             color="border-saffron/30 bg-saffron/10"
           >
             <div className="mt-4">
-              <button onClick={() => runVerify(false)} disabled={verifying}
-                className="w-full rounded-xl bg-saffron px-3 py-2 text-xs font-semibold text-cream disabled:opacity-50">
+              <button 
+                onClick={() => runVerify(false)} 
+                disabled={verifying}
+                className="w-full rounded-xl bg-saffron px-3 py-2 text-xs font-semibold text-cream disabled:opacity-50 hover:bg-saffron-dark transition-colors"
+              >
                 {verifying ? "Checking…" : "Check Payment Status"}
               </button>
             </div>
           </StateCard>
         )}
+        
         {status === "success" && (
           <StateCard
             icon={<CheckCircle2 className="h-12 w-12 text-emerald-600" />}
@@ -224,6 +291,7 @@ function PaymentStatusScreen() {
             color="border-emerald-200 bg-emerald-50"
           />
         )}
+        
         {status === "failed" && (
           <StateCard
             icon={<XCircle className="h-12 w-12 text-red-600" />}
@@ -232,12 +300,22 @@ function PaymentStatusScreen() {
             color="border-red-200 bg-red-50"
           >
             <div className="mt-4 flex gap-2">
-              <button onClick={() => navigate("/checkout")}
-                className="rounded-xl bg-saffron px-3 py-2 text-xs font-semibold text-cream">Retry Payment</button>
-              <Link to="/cart" className="rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">Back To Cart</Link>
+              <button 
+                onClick={() => navigate("/checkout")}
+                className="rounded-xl bg-saffron px-3 py-2 text-xs font-semibold text-cream hover:bg-saffron-dark transition-colors"
+              >
+                Retry Payment
+              </button>
+              <Link 
+                to="/cart" 
+                className="rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
+              >
+                Back To Cart
+              </Link>
             </div>
           </StateCard>
         )}
+        
         {status === "cod" && (
           <StateCard
             icon={<CheckCircle2 className="h-12 w-12 text-emerald-600" />}
@@ -249,10 +327,17 @@ function PaymentStatusScreen() {
 
         <div className="rounded-2xl border border-gold/25 bg-card p-4">
           <p className="text-display text-base text-maroon">{order.outlet?.outlet_name ?? "Outlet"}</p>
-          {order.outlet?.address && <p className="mt-0.5 flex items-start gap-1 text-xs text-maroon-deep/60"><MapPin className="mt-0.5 h-3 w-3" />{order.outlet.address}</p>}
+          {order.outlet?.address && (
+            <p className="mt-0.5 flex items-start gap-1 text-xs text-maroon-deep/60">
+              <MapPin className="mt-0.5 h-3 w-3" />
+              {order.outlet.address}
+            </p>
+          )}
           
           <div className="mt-4 space-y-2 border-t border-gold/20 pt-4">
-            <p className="mb-2 text-xs font-semibold tracking-wider text-maroon-deep/70 uppercase">Order Items</p>
+            <p className="mb-2 text-xs font-semibold tracking-wider text-maroon-deep/70 uppercase">
+              Order Items
+            </p>
             {order.items?.map((item) => (
               <div key={item.id} className="flex justify-between text-sm">
                 <div className="flex gap-2 text-maroon">
@@ -270,7 +355,9 @@ function PaymentStatusScreen() {
           </div>
           <div className="mt-1 flex items-center justify-between text-xs">
             <span className="text-maroon-deep/70">Payment method</span>
-            <span className="font-semibold text-maroon">{isCod ? "Cash On Delivery" : "PhonePe / UPI"}</span>
+            <span className="font-semibold text-maroon">
+              {isCod ? "Cash On Delivery" : "PhonePe / UPI"}
+            </span>
           </div>
         </div>
 
@@ -282,23 +369,31 @@ function PaymentStatusScreen() {
             </div>
             {invoice ? (
               <>
-                <p className="text-xs text-maroon-deep/70">No. <span className="font-semibold text-maroon">{invoice.invoice_number}</span></p>
+                <p className="text-xs text-maroon-deep/70">
+                  No. <span className="font-semibold text-maroon">{invoice.invoice_number}</span>
+                </p>
                 <p className="mt-0.5 text-[11px] text-maroon-deep/60">
                   Generated {new Date(invoice.generated_at).toLocaleString()}
                 </p>
                 <div className="mt-3 flex gap-2">
                   {invoice.invoice_url ? (
-                    <a href={invoice.invoice_url} target="_blank" rel="noreferrer"
-                       className="flex-1 rounded-xl bg-saffron px-3 py-2 text-center text-xs font-semibold text-cream">
+                    <a 
+                      href={invoice.invoice_url} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="flex-1 rounded-xl bg-saffron px-3 py-2 text-center text-xs font-semibold text-cream hover:bg-saffron-dark transition-colors"
+                    >
                       Download Invoice
                     </a>
                   ) : (
-                    <button disabled
-                       className="flex-1 rounded-xl bg-saffron/40 px-3 py-2 text-xs font-semibold text-cream/80">
+                    <button disabled className="flex-1 rounded-xl bg-saffron/40 px-3 py-2 text-xs font-semibold text-cream/80">
                       PDF coming soon
                     </button>
                   )}
-                  <button onClick={refreshInvoice} className="rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
+                  <button 
+                    onClick={refreshInvoice} 
+                    className="rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
+                  >
                     Refresh
                   </button>
                 </div>
@@ -309,12 +404,18 @@ function PaymentStatusScreen() {
                   Invoice is being generated. Please refresh in a few seconds.
                 </p>
                 <div className="mt-3 flex gap-2">
-                  <button onClick={refreshInvoice} disabled={invLoading}
-                    className="flex-1 rounded-xl bg-saffron px-3 py-2 text-xs font-semibold text-cream disabled:opacity-60">
+                  <button 
+                    onClick={refreshInvoice} 
+                    disabled={invLoading}
+                    className="flex-1 rounded-xl bg-saffron px-3 py-2 text-xs font-semibold text-cream disabled:opacity-60 hover:bg-saffron-dark transition-colors"
+                  >
                     Refresh Invoice
                   </button>
-                  <button onClick={regenerate} disabled={invLoading}
-                    className="rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
+                  <button 
+                    onClick={regenerate} 
+                    disabled={invLoading}
+                    className="rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
+                  >
                     Generate
                   </button>
                 </div>
@@ -324,20 +425,28 @@ function PaymentStatusScreen() {
         )}
 
         <div className="grid grid-cols-2 gap-2">
-          <button onClick={() => navigate(`/customer/order/${order.order.id }`)}
-            className="flex items-center justify-center gap-2 rounded-xl bg-maroon px-3 py-2 text-xs font-semibold text-cream">
+          <button 
+            onClick={() => navigate(`/customer/order/${order.order.id}`)}
+            className="flex items-center justify-center gap-2 rounded-xl bg-maroon px-3 py-2 text-xs font-semibold text-cream hover:bg-maroon-dark transition-colors"
+          >
             <ReceiptText className="h-3.5 w-3.5" /> Track Order
           </button>
-          <Link to="/customer/orders"
-            className="flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
+          <Link 
+            to="/customer/orders"
+            className="flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
+          >
             My Orders
           </Link>
-          <Link to="/customer/menu"
-            className="col-span-2 flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
+          <Link 
+            to="/customer/menu"
+            className="col-span-2 flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon hover:bg-gold/5 transition-colors"
+          >
             <ShoppingBag className="h-3.5 w-3.5" /> Continue Shopping
           </Link>
-          <button onClick={refresh}
-            className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-cream-warm/40 px-3 py-2 text-[11px] font-medium text-maroon-deep/70">
+          <button 
+            onClick={refresh}
+            className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-cream-warm/40 px-3 py-2 text-[11px] font-medium text-maroon-deep/70 hover:bg-cream-warm/60 transition-colors"
+          >
             <RefreshCw className="h-3 w-3" /> Refresh status
           </button>
         </div>
@@ -348,7 +457,13 @@ function PaymentStatusScreen() {
 
 function StateCard({
   icon, title, subtitle, color, children,
-}: { icon: React.ReactNode; title: string; subtitle: string; color: string; children?: React.ReactNode }) {
+}: { 
+  icon: React.ReactNode; 
+  title: string; 
+  subtitle: string; 
+  color: string; 
+  children?: React.ReactNode 
+}) {
   return (
     <div className={`rounded-3xl border p-6 text-center ${color}`}>
       <div className="grid place-items-center">{icon}</div>
@@ -358,4 +473,5 @@ function StateCard({
     </div>
   );
 }
+
 export default PaymentStatusScreen;

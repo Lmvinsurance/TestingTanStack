@@ -14,21 +14,60 @@ import { toast } from "sonner";
 
 type Detail = Awaited<ReturnType<typeof getMyOrderDetail>>;
 
-const TIMELINE_STEPS = [
-  { key: "order_received", label: "Order Received" },
-  { key: "payment_confirmed", label: "Payment Confirmed" },
-  { key: "preparing", label: "Preparing Food" },
-  { key: "ready", label: "Ready For Dispatch" },
-  { key: "out_for_delivery", label: "Out For Delivery" },
-  { key: "delivered", label: "Delivered" },
-] as const;
+function getTimelineSteps(orderType: string) {
+  const base = [
+    { key: "received", label: "Order Received" },
+    { key: "payment_confirmed", label: "Payment Confirmed" },
+    { key: "preparing", label: "Preparing Food" },
+  ];
+
+  if (orderType === "pickup") {
+    return [
+      ...base,
+      { key: "ready", label: "Ready for Pickup" },
+      { key: "completed", label: "Picked Up" },
+    ];
+  }
+
+  if (orderType === "dine_in") {
+    return [
+      ...base,
+      { key: "ready", label: "Ready to Serve" },
+      { key: "completed", label: "Served" },
+    ];
+  }
+
+  // Delivery
+  return [
+    ...base,
+    { key: "ready", label: "Ready For Dispatch" },
+    { key: "out_for_delivery", label: "Out For Delivery" },
+    { key: "delivered", label: "Delivered" },
+  ];
+}
 
 function timelineState(detail: Detail) {
   const reached = new Set<string>();
   for (const h of detail.history) reached.add(h.new_status);
-  if (detail.order.paymentStatus === "paid" || detail.order.paymentStatus === "cash_on_delivery") reached.add("payment_confirmed");
+  
+  // Backwards compatibility for order_received
+  if (reached.has("order_received")) reached.add("received");
+  for (const h of detail.history) {
+    if (h.old_status === null && h.new_status === "pending_payment") {
+      reached.add("received");
+    }
+  }
+  
+  if (detail.order.paymentStatus === "paid" || detail.order.paymentStatus === "cash_on_delivery") {
+    reached.add("received");
+    reached.add("payment_confirmed");
+  }
+  
   // current = latest status
   const current = detail.order.orderStatus;
+  if (current !== "pending_payment" && current !== "received") {
+     reached.add("received");
+  }
   return { reached, current };
 }
 
@@ -103,7 +142,7 @@ function OrderDetailScreen() {
         {isDelivered && (
           <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center">
             <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-600" />
-            <p className="text-display mt-2 text-base text-maroon">Delivered Successfully</p>
+            <p className="text-display mt-2 text-base text-maroon">{order.orderType === 'delivery' ? 'Delivered' : order.orderType === 'pickup' ? 'Picked Up' : 'Served'} Successfully</p>
             <p className="text-[11px] text-maroon-deep/60">Thank you for choosing Kosia Rajula Ruchulu.</p>
             <button onClick={() => toast.message("Review feature coming soon")} className="mt-3 rounded-xl bg-saffron px-4 py-2 text-xs font-semibold text-cream">
               Write Review
@@ -126,8 +165,8 @@ function OrderDetailScreen() {
           <div className="rounded-2xl border border-gold/25 bg-card p-4">
             <ol className="relative space-y-4 pl-6">
               <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-gold/20" />
-              {TIMELINE_STEPS.map((s) => {
-                const done = reached.has(s.key);
+              {getTimelineSteps(order.orderType).map((s) => {
+                const done = reached.has(s.key) || current === s.key || isDelivered;
                 const isCurrent = s.key === current;
                 return (
                   <li key={s.key} className="relative">
@@ -138,7 +177,7 @@ function OrderDetailScreen() {
                     </span>
                     <p className={`text-xs font-semibold ${done ? "text-maroon" : "text-maroon-deep/40"}`}>{s.label}</p>
                     {(() => {
-                      const h = history.find((x) => x.new_status === s.key);
+                      const h = history.find((x) => x.new_status === s.key || (s.key === "received" && (x.new_status === "order_received" || x.new_status === "received")));
                       return h ? <p className="text-[10px] text-maroon-deep/50">{new Date(h.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</p> : null;
                     })()}
                   </li>
