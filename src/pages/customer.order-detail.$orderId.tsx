@@ -82,9 +82,9 @@ function OrderDetailScreen() {
     <main className="min-h-screen bg-cream pb-20">
       <header className="sticky top-0 z-30 border-b border-gold/20 bg-cream/95 px-4 py-3 backdrop-blur">
         <div className="mx-auto flex max-w-md items-center gap-3 sm:max-w-lg">
-          <Link to="/customer/my-orders" aria-label="Back"
-            className="grid h-10 w-10 place-items-center rounded-full border border-gold/40 text-maroon">
-            <ArrowLeft className="h-5 w-5" />
+          <Link to="/customer/orders" aria-label="Back"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-maroon/5 text-maroon hover:bg-maroon/10">
+            <ArrowLeft className="h-4 w-4" />
           </Link>
           <div className="min-w-0 flex-1">
             <h1 className="text-display text-lg leading-tight text-maroon">{order.orderNumber}</h1>
@@ -284,8 +284,8 @@ function OrderDetailScreen() {
             className="flex items-center justify-center gap-1 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
             <HelpCircle className="h-3.5 w-3.5" /> Need Help
           </button>
-          <Link to="/customer/my-orders" className="col-span-2 flex items-center justify-center gap-1 rounded-xl bg-cream-warm/40 px-3 py-2 text-xs font-semibold text-maroon-deep">
-            <ReceiptText className="h-3.5 w-3.5" /> All Orders
+          <Link to="/customer/orders" className="col-span-2 flex items-center justify-center gap-1 rounded-xl bg-cream-warm/40 px-3 py-2 text-xs font-semibold text-maroon-deep">
+            <ReceiptText className="h-3.5 w-3.5" /> View All Orders
           </Link>
         </div>
       </div>
