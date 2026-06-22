@@ -8,13 +8,14 @@ import {
 } from "lucide-react";
 import {
   getMyOrderDetail,
+  updateCustomerPaymentStatus,
+  updateOrderStatus,
 } from "@/lib/orders.functions";
 import { verifyPhonePePayment } from "@/lib/payments.functions";
 import { getMyInvoiceForOrder, generateMyInvoice } from "@/lib/invoices.functions";
 import { clearCart } from "@/lib/cart-store";
 import { clearCheckout } from "@/lib/checkout-store";
 import { toast } from "sonner";
-import { updateCustomerPaymentStatus } from "@/lib/orders.functions";
 
 type Search = { orderId?: string; method?: "phonepe" | "upi" | "cod" };
 
@@ -28,6 +29,8 @@ function PaymentStatusScreen() {
   const verifyPhonePe = useServerFn(verifyPhonePePayment);
   const fetchInvoice = useServerFn(getMyInvoiceForOrder);
   const regenInvoice = useServerFn(generateMyInvoice);
+  const updatePayment = useServerFn(updateCustomerPaymentStatus);
+  const updateOrder = useServerFn(updateOrderStatus);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,8 +57,6 @@ function PaymentStatusScreen() {
     }
   };
 
-  const updatePayment = useServerFn(updateCustomerPaymentStatus);
-
   const runVerify = async (silent = false) => {
     if (!orderId || !isOnline) {
       console.log("Cannot verify: missing orderId or not online payment");
@@ -68,7 +69,7 @@ function PaymentStatusScreen() {
     try {
       let statusResult = "pending";
       
-      // Get merchant transaction ID from URL or order
+      // Get merchant transaction ID from URL
       let mTxnId = sp.get("merchantTxnId");
       
       // If not in URL, try to get from order's payment record
@@ -78,51 +79,48 @@ function PaymentStatusScreen() {
       
       console.log("Merchant Transaction ID:", mTxnId);
       
-      if (isOnline) {
-        // Call the verification function with the transaction ID
-        const result = await updatePayment({ 
+      // Call the verification function with the transaction ID
+      const result = await updatePayment({ 
+        data: { 
+          orderId, 
+          merchantTransactionId: mTxnId 
+        } 
+      });
+      
+      console.log("Payment update result:", result);
+      statusResult = result.status;
+      
+      // If payment is successful, update order status
+      if (statusResult === "success" || statusResult === "paid") {
+        console.log("Payment successful, updating order status to received");
+        
+        // Update order status to "received"
+        await updateOrder({ 
           data: { 
             orderId, 
-            merchantTransactionId: mTxnId 
+            orderStatus: "received",
+            paymentStatus: "paid"
           } 
         });
         
-        console.log("Payment update result:", result);
-        statusResult = result.status;
+        // Refresh to get updated order
+        await refresh();
+        console.log("Order status updated successfully");
         
-        // If payment is successful, refresh order data
-        if (statusResult === "success" || statusResult === "paid") {
-          // Refresh order data to get updated status
-          const updatedOrder = await refresh();
-          console.log("Updated order after payment:", updatedOrder);
-          
-          // If order status is still pending, we need to update it
-          if (updatedOrder && updatedOrder.order.order_status === "pending_payment") {
-            console.log("Order status is still pending_payment, updating to received");
-            
-            // Call a function to update order status to "received"
-            // You'll need to implement this server function
-            try {
-              await updateOrderStatus({ 
-                data: { 
-                  orderId, 
-                  orderStatus: "received",
-                  paymentStatus: "paid"
-                } 
-              });
-              
-              // Refresh again to get the updated order
-              await refresh();
-              console.log("Order status updated successfully");
-            } catch (statusError) {
-              console.error("Failed to update order status:", statusError);
-            }
-          }
-        }
-      } else {
-        const res = await verifyPhonePe({ data: { orderId } });
-        console.log("PhonePe verification result:", res);
-        statusResult = res.paymentStatus;
+        // Clear cart for successful payment
+        clearCart();
+        clearCheckout();
+      } else if (statusResult === "failed") {
+        console.log("Payment failed");
+        // Update order status to payment_failed
+        await updateOrder({ 
+          data: { 
+            orderId, 
+            orderStatus: "payment_failed",
+            paymentStatus: "failed"
+          } 
+        });
+        await refresh();
       }
       
       // Refresh one more time to ensure we have the latest data
@@ -132,9 +130,6 @@ function PaymentStatusScreen() {
       if (!silent) {
         if (statusResult === "success" || statusResult === "paid") {
           toast.success("Payment confirmed! Your order is being prepared.");
-          // Clear cart for successful payment
-          clearCart();
-          clearCheckout();
         } else if (statusResult === "failed") {
           toast.error("Payment failed. Please try again.");
         } else {

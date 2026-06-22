@@ -100,7 +100,7 @@ export async function applyPhonePeStatus(
   const { data: existing } = await supabaseAdmin
     .from("payments")
     .select("id")
-    .eq("transaction_id", txnId)
+    .eq("merchant_transaction_id", status.orderId)
     .maybeSingle();
   if (existing) {
     await supabaseAdmin.from("payments").update(paymentRow).eq("id", existing.id);
