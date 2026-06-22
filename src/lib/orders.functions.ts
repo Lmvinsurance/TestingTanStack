@@ -147,9 +147,6 @@ export const createOrder = createServerFn({ method: "POST" })
     }
 
     const isCod = data.paymentMethod === "cod";
-    // Status mismatch fix: orders.order_status enum uses 'received', not 'order_received';
-    // orders.payment_status enum does not include 'cash_on_delivery' — COD stays 'pending'
-    // until cash is collected at delivery (invoice generated then).
     const orderStatus = isCod ? "received" : "pending_payment";
     const paymentStatus = "pending";
 
@@ -210,7 +207,6 @@ export const createOrder = createServerFn({ method: "POST" })
     }
 
     if (isCod) {
-      // Record the COD intent as a pending payment row for audit.
       await supabaseAdmin.from("payments").insert({
         order_id: orderRow.id,
         payment_gateway: "manual",
@@ -229,10 +225,6 @@ export const createOrder = createServerFn({ method: "POST" })
       changed_by: context.userId,
       changed_by_role: "customer",
     });
-
-    // Invoice is generated only after payment_status = 'paid'. COD orders
-    // get their invoice when cash is collected (separate step), not here.
-
 
     let merchantTransactionId = undefined;
     if (!isCod) {
@@ -317,14 +309,32 @@ export const simulatePaymentSuccess = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+// FIXED: Updated updateCustomerPaymentStatus function
 export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { orderId: string, merchantTransactionId?: string }) => data)
+  .inputValidator((data: { orderId: string, merchantTransactionId?: string }) => {
+    if (!data?.orderId) throw new Error("orderId required");
+    return data;
+  })
   .handler(async ({ data, context }) => {
     await assertOrderOwnership(data.orderId, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const axios = (await import("axios")).default;
 
+    // Get the order and payment records
+    const { data: order } = await supabaseAdmin
+      .from("orders")
+      .select("id, payment_status, order_status")
+      .eq("id", data.orderId)
+      .single();
+
+    if (!order) throw new Error("Order not found");
+
+    // If already paid, return success
+    if (order.payment_status === "paid") {
+      return { success: true, status: "paid" };
+    }
+
+    // Get the pending payment record
     const { data: pay } = await supabaseAdmin
       .from("payments")
       .select("id, merchant_transaction_id")
@@ -332,23 +342,102 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
       .eq("payment_status", "pending")
       .maybeSingle();
 
-    const { data: orderRow } = await supabaseAdmin
-      .from("orders")
-      .select("order_status")
-      .eq("id", data.orderId)
-      .single();
-
     const mTxnId = data.merchantTransactionId || pay?.merchant_transaction_id;
-    if (!mTxnId) return { success: false, status: "pending" };
-    
-    // Server-side verification securely using edge function
-    const { phonepeOrderStatus, applyPhonePeStatus } = await import("./phonepe.server");
-    const status = await phonepeOrderStatus(mTxnId);
-    const applied = await applyPhonePeStatus(data.orderId, status);
-    
-    return { success: applied.paymentStatus === 'success', status: applied.paymentStatus };
-  });
+    if (!mTxnId) {
+      return { success: false, status: "pending", message: "No transaction ID found" };
+    }
 
+    console.log("Verifying payment for transaction:", mTxnId);
+
+    try {
+      // Call PhonePe API to check payment status
+      const { phonepeOrderStatus } = await import("./phonepe.server");
+      const status = await phonepeOrderStatus(mTxnId);
+      
+      console.log("PhonePe status response:", status);
+
+      // Update order based on payment status
+      if (status.state === "COMPLETED") {
+        // Extract transaction ID from payment details
+        const transactionId = status.paymentDetails?.[0]?.transactionId;
+        
+        // Update payment record
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            payment_status: "success",
+            transaction_id: transactionId || mTxnId,
+            gateway_response_snapshot: status,
+            paid_at: new Date().toISOString(),
+          })
+          .eq("order_id", data.orderId)
+          .eq("payment_status", "pending");
+
+        // Update order - BOTH payment_status AND order_status
+        await supabaseAdmin
+          .from("orders")
+          .update({
+            payment_status: "paid",
+            order_status: "received", // This is the critical fix!
+            updated_at: new Date().toISOString(),
+            last_updated_by: context.userId,
+          })
+          .eq("id", data.orderId);
+
+        // Add to status history
+        await supabaseAdmin.from("order_status_history").insert({
+          order_id: data.orderId,
+          old_status: order.order_status,
+          new_status: "received",
+          remarks: "Payment confirmed via PhonePe. Order received.",
+          changed_by: context.userId,
+          changed_by_role: "customer",
+        });
+
+        // Generate invoice
+        try {
+          const { tryEnsureInvoice } = await import("./invoices.server");
+          await tryEnsureInvoice(data.orderId);
+        } catch (invoiceError) {
+          console.error("Error generating invoice:", invoiceError);
+        }
+
+        return { success: true, status: "success", transactionId };
+      } else if (status.state === "FAILED") {
+        // Update payment record
+        await supabaseAdmin
+          .from("payments")
+          .update({
+            payment_status: "failed",
+            gateway_response_snapshot: status,
+          })
+          .eq("order_id", data.orderId)
+          .eq("payment_status", "pending");
+
+        // Update order
+        await supabaseAdmin
+          .from("orders")
+          .update({
+            payment_status: "failed",
+            order_status: "payment_failed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", data.orderId);
+
+        return { success: false, status: "failed" };
+      } else {
+        // Still pending
+        return { success: false, status: "pending" };
+      }
+    } catch (error) {
+      console.error("Error verifying payment:", error);
+      return { 
+        success: false, 
+        status: "pending", 
+        message: error instanceof Error ? error.message : "Verification failed" 
+      };
+    }
+  });
 
 export const simulatePaymentFailed = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -383,6 +472,50 @@ export const simulatePaymentFailed = createServerFn({ method: "POST" })
       .eq("id", data.orderId);
 
     return { ok: true };
+  });
+
+export const updateOrderStatus = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { orderId: string; orderStatus: string; paymentStatus?: string }) => {
+    if (!data?.orderId) throw new Error("orderId required");
+    if (!data?.orderStatus) throw new Error("orderStatus required");
+    return data;
+  })
+  .handler(async ({ data, context }) => {
+    await assertOrderOwnership(data.orderId, context.userId);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const updateData: any = {
+      order_status: data.orderStatus,
+      updated_at: new Date().toISOString(),
+      last_updated_by: context.userId,
+    };
+
+    if (data.paymentStatus) {
+      updateData.payment_status = data.paymentStatus;
+    }
+
+    const { error } = await supabaseAdmin
+      .from("orders")
+      .update(updateData)
+      .eq("id", data.orderId);
+
+    if (error) {
+      console.error("Error updating order status:", error);
+      throw new Error("Failed to update order status");
+    }
+
+    // Add to status history
+    await supabaseAdmin.from("order_status_history").insert({
+      order_id: data.orderId,
+      old_status: null,
+      new_status: data.orderStatus,
+      remarks: `Order status updated to ${data.orderStatus}`,
+      changed_by: context.userId,
+      changed_by_role: "customer",
+    });
+
+    return { success: true };
   });
 
 export const getMyOrders = createServerFn({ method: "GET" })
