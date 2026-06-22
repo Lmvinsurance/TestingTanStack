@@ -170,11 +170,17 @@ function PaymentStatusScreen() {
       try {
         setInvLoading(true);
         const res = await fetchInvoice({ data: { orderId } });
-        if (!cancelled) setInvoice(res.invoice);
+        if (!cancelled) {
+          if (res.invoice && !res.invoice.invoice_url) {
+            await regenerate();
+          } else {
+            setInvoice(res.invoice);
+            setInvLoading(false);
+          }
+        }
       } catch (error) {
         console.error("Error fetching invoice:", error);
-      } finally { 
-        if (!cancelled) setInvLoading(false); 
+        if (!cancelled) setInvLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -186,13 +192,17 @@ function PaymentStatusScreen() {
     setInvLoading(true);
     try {
       const res = await fetchInvoice({ data: { orderId } });
-      setInvoice(res.invoice);
-      if (!res.invoice) toast.message("Invoice is still being generated.");
+      if (res.invoice && !res.invoice.invoice_url) {
+        await regenerate();
+      } else {
+        setInvoice(res.invoice);
+        if (!res.invoice) toast.message("Invoice is still being generated.");
+        setInvLoading(false);
+      }
     } catch (error) {
       console.error("Error refreshing invoice:", error);
       toast.error("Could not fetch invoice");
-    } finally { 
-      setInvLoading(false); 
+      setInvLoading(false);
     }
   };
 
