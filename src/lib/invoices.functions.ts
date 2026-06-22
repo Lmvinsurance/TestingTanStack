@@ -77,3 +77,24 @@ export const listMyInvoices = createServerFn({ method: "GET" })
       .order("generated_at", { ascending: false });
     return { invoices: invs ?? [] };
   });
+
+/** Save the generated PDF URL for a customer's invoice */
+export const saveMyInvoiceUrl = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { orderId: string, invoiceUrl: string }) => {
+    if (!data?.orderId) throw new Error("orderId required");
+    if (!data?.invoiceUrl) throw new Error("invoiceUrl required");
+    return data;
+  })
+  .handler(async ({ data, context }) => {
+    const ok = await customerOwnsOrder(data.orderId, context.userId);
+    if (!ok) throw new Error("Order not found");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { error } = await supabaseAdmin
+      .from("invoices")
+      .update({ invoice_url: data.invoiceUrl })
+      .eq("order_id", data.orderId)
+      .is("invoice_url", null);
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });

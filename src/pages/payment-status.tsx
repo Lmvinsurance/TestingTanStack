@@ -10,11 +10,13 @@ import {
   getMyOrderDetail,
 } from "@/lib/orders.functions";
 import { verifyPhonePePayment } from "@/lib/payments.functions";
-import { getMyInvoiceForOrder, generateMyInvoice } from "@/lib/invoices.functions";
+import { getMyInvoiceForOrder, generateMyInvoice, saveMyInvoiceUrl } from "@/lib/invoices.functions";
 import { clearCart } from "@/lib/cart-store";
 import { clearCheckout } from "@/lib/checkout-store";
 import { toast } from "sonner";
 import { updateCustomerPaymentStatus } from "@/lib/orders.functions";
+import { buildPdfBlob } from "@/components/invoice-pdf";
+import { supabase } from "@/integrations/supabase/client";
 
 type Search = { orderId?: string; method?: "phonepe" | "upi" | "cod" };
 
@@ -128,6 +130,8 @@ function PaymentStatusScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eligible, orderId]);
 
+  const saveInvoiceUrl = useServerFn(saveMyInvoiceUrl);
+
   const refreshInvoice = async () => {
     if (!orderId) return;
     setInvLoading(true);
@@ -137,6 +141,50 @@ function PaymentStatusScreen() {
       if (!res.invoice) toast.message("Invoice is still being generated.");
     } finally { setInvLoading(false); }
   };
+
+  useEffect(() => {
+    if (!invoice || invoice.invoice_url || !order) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setInvLoading(true);
+        const customerInfo = {
+          full_name: `${order.customer?.first_name || ''} ${order.customer?.last_name || ''}`.trim() || 'Guest',
+          phone: order.customer?.phone || '',
+          email: order.customer?.email || ''
+        };
+        const blob = await buildPdfBlob({
+          order: order.order,
+          items: order.items || [],
+          addons: [],
+          payments: order.payments || [],
+          customer: customerInfo,
+          outlet: order.outlet,
+          invoiceNumber: invoice.invoice_number
+        });
+
+        const path = `${orderId}/${invoice.invoice_number}.pdf`;
+        const { error: uploadError } = await supabase.storage
+          .from("invoices")
+          .upload(path, blob, { contentType: "application/pdf", upsert: true });
+
+        if (uploadError) throw new Error(uploadError.message);
+
+        const { data: pubData } = supabase.storage.from("invoices").getPublicUrl(path);
+
+        await saveInvoiceUrl({ data: { orderId: orderId!, invoiceUrl: pubData.publicUrl } });
+        
+        if (!cancelled) {
+          setInvoice({ ...invoice, invoice_url: pubData.publicUrl });
+        }
+      } catch (err) {
+        console.error("PDF gen error:", err);
+      } finally {
+        if (!cancelled) setInvLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [invoice?.invoice_url, order]);
 
   const regenerate = async () => {
     if (!orderId) return;
