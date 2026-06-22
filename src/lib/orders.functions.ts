@@ -319,17 +319,33 @@ export const simulatePaymentSuccess = createServerFn({ method: "POST" })
 
 export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { orderId: string, merchantTransactionId: string }) => data)
+  .inputValidator((data: { orderId: string, merchantTransactionId?: string }) => data)
   .handler(async ({ data, context }) => {
     await assertOrderOwnership(data.orderId, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const axios = (await import("axios")).default;
+
+    const { data: pay } = await supabaseAdmin
+      .from("payments")
+      .select("id, merchant_transaction_id")
+      .eq("order_id", data.orderId)
+      .eq("payment_status", "pending")
+      .maybeSingle();
+
+    const { data: orderRow } = await supabaseAdmin
+      .from("orders")
+      .select("order_status")
+      .eq("id", data.orderId)
+      .single();
+
+    const mTxnId = data.merchantTransactionId || pay?.merchant_transaction_id;
+    if (!mTxnId) return { success: false, status: "pending" };
     
     // Server-side verification
     const SUPABASE_EDGE_FUNCTION_URL = 'https://aynfbxixpviadworsbmk.supabase.co/functions/v1/phonepe';
     const response = await axios.post(SUPABASE_EDGE_FUNCTION_URL, {
       action: 'status',
-      merchantOrderId: data.merchantTransactionId
+      merchantOrderId: mTxnId
     });
     
     if (!response.data) {
@@ -345,31 +361,27 @@ export const updateCustomerPaymentStatus = createServerFn({ method: "POST" })
     else if (isFailed) dbStatus = "failed";
 
     if (dbStatus !== "pending") {
-      const { data: pay } = await supabaseAdmin
-        .from("payments")
-        .select("id")
-        .eq("order_id", data.orderId)
-        .eq("payment_status", "pending")
-        .maybeSingle();
-
       if (pay) {
         await supabaseAdmin.from("payments").update({
           payment_status: dbStatus,
           paid_at: dbStatus === 'success' ? new Date().toISOString() : null,
-          transaction_id: data.merchantTransactionId,
+          transaction_id: mTxnId,
         }).eq("id", pay.id);
       }
 
+      const newOrderStatus = dbStatus === 'success' ? 'received' : 'payment_failed';
+      const newPaymentStatus = dbStatus === 'success' ? 'paid' : 'failed';
+
       await supabaseAdmin.from("orders").update({
-        payment_status: dbStatus === 'success' ? 'paid' : 'failed',
-        order_status: dbStatus === 'success' ? 'received' : 'payment_failed',
+        payment_status: newPaymentStatus,
+        order_status: newOrderStatus,
         last_updated_by: context.userId,
       }).eq("id", data.orderId);
 
       await supabaseAdmin.from("order_status_history").insert({
         order_id: data.orderId,
-        old_status: 'pending_payment',
-        new_status: dbStatus === 'success' ? 'received' : 'payment_failed',
+        old_status: orderRow?.order_status || null,
+        new_status: newOrderStatus,
         remarks: dbStatus === 'success' ? 'Payment successful' : 'Payment failed',
         changed_by: context.userId,
         changed_by_role: 'customer',
@@ -427,7 +439,7 @@ export const getMyOrders = createServerFn({ method: "GET" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: orders, error } = await supabaseAdmin
       .from("orders")
-      .select("id, order_number, outlet_id, order_type, order_status, payment_status, grand_total, created_at")
+      .select("id, order_number, outlet_id, order_type, order_status, payment_status, grand_total, created_at, table_number")
       .eq("customer_id", customerId)
       .order("created_at", { ascending: false })
       .limit(200);
@@ -457,6 +469,7 @@ export const getMyOrders = createServerFn({ method: "GET" })
           orderStatus: o.order_status,
           paymentStatus: o.payment_status,
           grandTotal: Number(o.grand_total),
+          tableNumber: o.table_number,
           createdAt: o.created_at,
           firstItems: its.slice(0, 2),
           itemCount: its.length,
@@ -545,6 +558,7 @@ export const getMyOrderDetail = createServerFn({ method: "POST" })
         grandTotal: Number(order.grand_total),
         customerNotes: order.customer_notes,
         cancellationReason: order.cancellation_reason,
+        tableNumber: order.table_number,
         createdAt: order.created_at,
       },
       outlet: outletRes.data,

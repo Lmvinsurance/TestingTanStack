@@ -89,7 +89,7 @@ function OrderDetailScreen() {
           <div className="min-w-0 flex-1">
             <h1 className="text-display text-lg leading-tight text-maroon">{order.orderNumber}</h1>
             <p className="truncate text-[11px] text-maroon-deep/60 capitalize">
-              {order.orderType.replace("_", " ")} · {new Date(order.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
+              {order.orderType.replace("_", " ")} {order.tableNumber && `· Table ${order.tableNumber}`} · {new Date(order.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
             </p>
           </div>
           <button onClick={load} aria-label="Refresh" className="grid h-10 w-10 place-items-center rounded-full border border-gold/40 text-maroon">

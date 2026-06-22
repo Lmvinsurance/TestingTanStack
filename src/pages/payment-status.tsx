@@ -65,7 +65,8 @@ function PaymentStatusScreen() {
       let statusResult = "pending";
       const mTxnId = sp.get("merchantTxnId") || order?.payments?.[0]?.merchant_transaction_id;
       
-      if (mTxnId) {
+      if (isOnline) {
+        // We let the backend fetch the merchantTxnId from the database directly
         const result = await updatePayment({ data: { orderId, merchantTransactionId: mTxnId } });
         statusResult = result.status;
       } else {
@@ -228,8 +229,22 @@ function PaymentStatusScreen() {
         <div className="rounded-2xl border border-gold/25 bg-card p-4">
           <p className="text-display text-base text-maroon">{order.outlet?.outlet_name ?? "Outlet"}</p>
           {order.outlet?.address && <p className="mt-0.5 flex items-start gap-1 text-xs text-maroon-deep/60"><MapPin className="mt-0.5 h-3 w-3" />{order.outlet.address}</p>}
-          <div className="mt-3 flex items-center justify-between text-sm">
-            <span className="text-maroon-deep/70">Amount</span>
+          
+          <div className="mt-4 space-y-2 border-t border-gold/20 pt-4">
+            <p className="mb-2 text-xs font-semibold tracking-wider text-maroon-deep/70 uppercase">Order Items</p>
+            {order.items?.map((item) => (
+              <div key={item.id} className="flex justify-between text-sm">
+                <div className="flex gap-2 text-maroon">
+                  <span className="font-semibold text-saffron-deep">{item.quantity}x</span>
+                  <span>{item.itemName}</span>
+                </div>
+                <span className="font-semibold text-maroon">₹{item.totalPrice}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 border-t border-gold/20 pt-3 flex items-center justify-between text-sm">
+            <span className="text-maroon-deep/70">Amount Paid</span>
             <span className="text-display text-lg text-maroon">₹{order.order.grandTotal}</span>
           </div>
           <div className="mt-1 flex items-center justify-between text-xs">
@@ -292,7 +307,7 @@ function PaymentStatusScreen() {
             className="flex items-center justify-center gap-2 rounded-xl bg-maroon px-3 py-2 text-xs font-semibold text-cream">
             <ReceiptText className="h-3.5 w-3.5" /> Track Order
           </button>
-          <Link to="/customer/my-orders"
+          <Link to="/customer/orders"
             className="flex items-center justify-center gap-2 rounded-xl border border-gold/40 px-3 py-2 text-xs font-semibold text-maroon">
             My Orders
           </Link>

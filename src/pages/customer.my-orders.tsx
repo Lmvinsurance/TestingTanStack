@@ -138,6 +138,7 @@ function MyOrdersScreen() {
                       <p className="text-display text-sm text-maroon">{o.orderNumber}</p>
                       <p className="mt-0.5 flex items-center gap-1 text-[11px] text-maroon-deep/60">
                         <MapPin className="h-3 w-3" /> {o.outletName} · <span className="capitalize">{o.orderType.replace("_", " ")}</span>
+                        {o.tableNumber && <span>· Table {o.tableNumber}</span>}
                       </p>
                       <p className="text-[10px] text-maroon-deep/50">
                         {new Date(o.createdAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}

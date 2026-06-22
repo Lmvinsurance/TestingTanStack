@@ -28,10 +28,10 @@ const OPTIONS: { key: OrderType; label: string; icon: typeof Home }[] = [
   { key: "dine_in", label: "Dine In", icon: ChefHat },
 ];
 
-const PAYMENTS: { key: PaymentMethod; label: string; sub: string; icon: typeof Smartphone; recommended?: boolean }[] = [
+const PAYMENTS: { key: PaymentMethod; label: string; sub: string; icon: typeof Smartphone; recommended?: boolean; comingSoon?: boolean }[] = [
   { key: "phonepe", label: "PhonePe", sub: "UPI, Cards, Wallets", icon: Smartphone, recommended: true },
-  { key: "upi", label: "UPI", sub: "Any UPI app", icon: BadgeCheck },
-  { key: "cod", label: "Cash On Delivery", sub: "Pay when you receive", icon: Wallet },
+  { key: "upi", label: "UPI", sub: "Any UPI app", icon: BadgeCheck, comingSoon: true },
+  { key: "cod", label: "Cash On Delivery", sub: "Pay when you receive", icon: Wallet, comingSoon: true },
 ];
 
 function CheckoutScreen() {
@@ -407,16 +407,20 @@ function CheckoutScreen() {
         <Section title="Payment Method">
           <div className="space-y-2">
             {PAYMENTS.map((p) => (
-              <button key={p.key} onClick={() => setCheckout({ paymentMethod: p.key })}
+              <button key={p.key} 
+                onClick={() => { if (!p.comingSoon) setCheckout({ paymentMethod: p.key }); }}
+                disabled={p.comingSoon}
                 className={`flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition ${
                   checkout.paymentMethod === p.key ? "border-saffron bg-saffron/10" : "border-gold/30 bg-card"
-                }`}>
-                <div className="grid h-10 w-10 place-items-center rounded-full bg-saffron/15 text-saffron-deep">
+                } ${p.comingSoon ? "opacity-60 cursor-not-allowed" : ""}`}>
+                <div className={`grid h-10 w-10 place-items-center rounded-full ${p.comingSoon ? "bg-gray-100 text-gray-400" : "bg-saffron/15 text-saffron-deep"}`}>
                   <p.icon className="h-4 w-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-maroon">
-                    {p.label} {p.recommended && <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] uppercase text-emerald-700">Recommended</span>}
+                  <p className="text-sm font-semibold text-maroon flex items-center gap-2">
+                    {p.label} 
+                    {p.recommended && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] uppercase text-emerald-700">Recommended</span>}
+                    {p.comingSoon && <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[9px] uppercase text-gray-600">Coming Soon</span>}
                   </p>
                   <p className="text-[11px] text-maroon-deep/60">{p.sub}</p>
                 </div>
